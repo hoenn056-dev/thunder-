@@ -4,7 +4,7 @@ import yfinance as yf
 import time
 import google.generativeai as genai
 import requests
-import pandas_ta as ta
+import pandas_ta_classic as ta
 import numpy as np
 from streamlit_lightweight_charts import renderLightweightCharts
 
