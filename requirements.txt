@@ -2,6 +2,6 @@ streamlit
 pandas
 yfinance
 pandas_ta_classic
-streamlit-lightweight-charts-pro
+streamlit-lightweight-charts
 google-generativeai
 requests
