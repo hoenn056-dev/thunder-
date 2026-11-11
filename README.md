@@ -1,2 +1,2 @@
-# thunder-
+# thunder
 AI-generated website 
