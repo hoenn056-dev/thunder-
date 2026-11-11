@@ -21,7 +21,7 @@ st.title("⚡ Thunder - AI Analyst")
 # إعداد الذكاء الاصطناعي
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3.8-flash')
 except Exception as e:
     st.error(f"خطأ في إعداد مفتاح Gemini: {e}. تأكد من إضافته في إعدادات Secrets.")
 
