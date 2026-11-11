@@ -10,7 +10,6 @@ from streamlit_lightweight_charts_pro.data import OhlcData, SingleValueData
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
-
 st.title("⚡ Thunder - Institutional TradingView Dashboard")
 
 # ================= 1. الإعدادات الجانبية =================
@@ -23,7 +22,6 @@ with st.sidebar:
 # ================= 2. دوال التحليل والبيانات =================
 @st.cache_data(ttl=300)
 def get_market_data(sym, tf):
-    # تحديد فترة الجلب المناسبة لكل إطار (يمنع خطأ البيانات الفارغة في 15 دقيقة)
     if tf == "15m":
         period = "5d"
     elif tf == "1h":
@@ -39,12 +37,9 @@ def get_market_data(sym, tf):
         df.columns = df.columns.get_level_values(0)
     
     df.columns = [c.lower() for c in df.columns]
-    
-    # حساب المؤشرات الفنية
     df['rsi'] = ta.rsi(df['close'], length=14)
     df['ema50'] = ta.ema(df['close'], length=50)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-    
     return df
 
 def send_telegram_alert(text):
@@ -57,14 +52,13 @@ def send_telegram_alert(text):
     except:
         return False
 
-# جلب البيانات ومعالجتها
+# جلب البيانات
 df = get_market_data(yf_symbol, timeframe)
 
 if df is None or len(df) < 50:
     st.error("تعذر جلب البيانات الكافية لهذا الإطار الزمني. جرّب إطاراً زمنياً آخر أو تأكد من فتح السوق.")
     st.stop()
 
-# استخراج قيم الشمعة الأخيرة
 last_candle = df.iloc[-1]
 current_price = float(last_candle['close'])
 rsi_value = float(last_candle['rsi']) if not pd.isna(last_candle['rsi']) else 50.0
@@ -80,10 +74,11 @@ col4.metric("الإطار الزمني", timeframe.upper())
 st.divider()
 
 # ================= 4. شارت TradingView والتحليل =================
+# تحسين التنقل باستخدام التبويبات
 tab_chart, tab_trade = st.tabs(["📈 شارت TradingView الاحترافي", "🎯 خطة التداول والمخاطر"])
 
 with tab_chart:
-    # تحويل البيانات إلى الصيغة التي تفهمها TradingView Pro
+    # إصلاح الخطأ: استخدام OhlcData و CandlestickSeries بالطريقة الصحيحة
     candle_data = [
         OhlcData(
             time=idx.strftime('%Y-%m-%d %H:%M:%S') if hasattr(idx, 'strftime') else str(idx),
@@ -101,7 +96,7 @@ with tab_chart:
         ) for idx, row in df.iterrows() if not pd.isna(row['ema50'])
     ]
 
-    # إنشاء الشارت على نمط منصات التداول الاحترافية
+    # إنشاء الشارت
     chart = Chart(
         series=[
             CandlestickSeries(candle_data, up_color="#26a69a", down_color="#ef5350"),
