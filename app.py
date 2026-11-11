@@ -5,7 +5,7 @@ import time
 import requests
 import pandas_ta_classic as ta
 import google.generativeai as genai
-from streamlit_lightweight_charts_pro import renderChart
+from streamlit_lightweight_charts import renderLightweightCharts
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
@@ -21,7 +21,6 @@ with st.sidebar:
 # ================= 2. دوال التحليل والبيانات =================
 @st.cache_data(ttl=300)
 def get_market_data(sym, tf):
-    # تحديد فترة الجلب المناسبة لكل إطار (يمنع خطأ البيانات الفارغة)
     if tf == "15m":
         period = "5d"
     elif tf == "1h":
@@ -76,24 +75,38 @@ col4.metric("الإطار الزمني", timeframe.upper())
 
 st.divider()
 
-# ================= 4. التبويبات (الشارت وخطة التداول) =================
-tab_chart, tab_trade = st.tabs(["📈 شارت TradingView الاحترافي", "🎯 خطة التداول والمخاطر"])
+# ================= 4. التبويبات =================
+tab_chart, tab_trade = st.tabs(["📈 شارت TradingView", "🎯 خطة التداول والمخاطر"])
 
 with tab_chart:
-    # تجهيز البيانات لـ renderChart
+    # تجهيز البيانات للمكتبة الأصلية
     chart_df = df.reset_index()
-    # تحويل عمود الوقت إلى تنسيق تفهمه المكتبة
     time_col = 'Datetime' if 'Datetime' in chart_df.columns else 'Date'
-    chart_df['time'] = pd.to_datetime(chart_df[time_col])
+    chart_df['time'] = pd.to_datetime(chart_df[time_col]).apply(lambda x: int(time.mktime(x.timetuple())))
     
-    # استدعاء الدالة المبسطة renderChart
-    renderChart(
-        chart_df,
-        title=f"{symbol} - {timeframe}",
-        height=520,
-        seriesType='candlestick',
-        key="tradingview_chart"
-    )
+    candles = [{
+        "type": 'Candlestick',
+        "data": chart_df[['time', 'open', 'high', 'low', 'close']].to_dict('records'),
+        "options": {"upColor": '#26a69a', "downColor": '#ef5350', "borderVisible": False}
+    }]
+    
+    # إضافة خط EMA 50
+    ema_data = chart_df[['time', 'ema50']].dropna().rename(columns={'ema50': 'value'})
+    ema = [{
+        "type": 'Line',
+        "data": ema_data.to_dict('records'),
+        "options": {"color": '#f59e0b', "lineWidth": 2}
+    }]
+
+    chartOptions = {
+        "height": 520,
+        "layout": {"textColor": '#d1d4dc', "background": {"type": 'solid', "color": '#0a0a0f'}},
+        "grid": {"vertLines": {"color": '#1e1e2d'}, "horzLines": {"color": '#1e1e2d'}},
+        "timeScale": {"timeVisible": True, "borderColor": '#2B2B43'},
+        "handleScroll": True, "handleScale": True
+    }
+    
+    renderLightweightCharts([{"chart": chartOptions, "series": candles + ema}], 'chart1')
 
 with tab_trade:
     st.subheader("إدارة المخاطر والصفقة المقترحة")
