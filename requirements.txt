@@ -1,7 +1,7 @@
 streamlit
 pandas
-yfinance
-streamlit-lightweight-charts
+yfinance>=1.0
+pandas_ta_classic
+streamlit-lightweight-charts-pro
 google-generativeai
 requests
-pandas-ta-classic
