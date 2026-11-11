@@ -5,3 +5,4 @@ pandas_ta_classic
 streamlit-lightweight-charts
 google-generativeai
 requests
+Pillow
