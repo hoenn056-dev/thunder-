@@ -5,8 +5,7 @@ import time
 import requests
 import pandas_ta_classic as ta
 import google.generativeai as genai
-from streamlit_lightweight_charts_pro import Chart, CandlestickSeries, LineSeries
-from streamlit_lightweight_charts_pro.data import OhlcData, SingleValueData
+from streamlit_lightweight_charts_pro import renderChart
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
@@ -22,6 +21,7 @@ with st.sidebar:
 # ================= 2. دوال التحليل والبيانات =================
 @st.cache_data(ttl=300)
 def get_market_data(sym, tf):
+    # تحديد فترة الجلب المناسبة لكل إطار (يمنع خطأ البيانات الفارغة)
     if tf == "15m":
         period = "5d"
     elif tf == "1h":
@@ -37,6 +37,8 @@ def get_market_data(sym, tf):
         df.columns = df.columns.get_level_values(0)
     
     df.columns = [c.lower() for c in df.columns]
+    
+    # حساب المؤشرات الفنية
     df['rsi'] = ta.rsi(df['close'], length=14)
     df['ema50'] = ta.ema(df['close'], length=50)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
@@ -59,6 +61,7 @@ if df is None or len(df) < 50:
     st.error("تعذر جلب البيانات الكافية لهذا الإطار الزمني. جرّب إطاراً زمنياً آخر أو تأكد من فتح السوق.")
     st.stop()
 
+# استخراج قيم الشمعة الأخيرة
 last_candle = df.iloc[-1]
 current_price = float(last_candle['close'])
 rsi_value = float(last_candle['rsi']) if not pd.isna(last_candle['rsi']) else 50.0
@@ -73,38 +76,24 @@ col4.metric("الإطار الزمني", timeframe.upper())
 
 st.divider()
 
-# ================= 4. شارت TradingView والتحليل =================
-# تحسين التنقل باستخدام التبويبات
+# ================= 4. التبويبات (الشارت وخطة التداول) =================
 tab_chart, tab_trade = st.tabs(["📈 شارت TradingView الاحترافي", "🎯 خطة التداول والمخاطر"])
 
 with tab_chart:
-    # إصلاح الخطأ: استخدام OhlcData و CandlestickSeries بالطريقة الصحيحة
-    candle_data = [
-        OhlcData(
-            time=idx.strftime('%Y-%m-%d %H:%M:%S') if hasattr(idx, 'strftime') else str(idx),
-            open=float(row['open']),
-            high=float(row['high']),
-            low=float(row['low']),
-            close=float(row['close'])
-        ) for idx, row in df.iterrows()
-    ]
+    # تجهيز البيانات لـ renderChart
+    chart_df = df.reset_index()
+    # تحويل عمود الوقت إلى تنسيق تفهمه المكتبة
+    time_col = 'Datetime' if 'Datetime' in chart_df.columns else 'Date'
+    chart_df['time'] = pd.to_datetime(chart_df[time_col])
     
-    ema_data = [
-        SingleValueData(
-            time=idx.strftime('%Y-%m-%d %H:%M:%S') if hasattr(idx, 'strftime') else str(idx),
-            value=float(row['ema50'])
-        ) for idx, row in df.iterrows() if not pd.isna(row['ema50'])
-    ]
-
-    # إنشاء الشارت
-    chart = Chart(
-        series=[
-            CandlestickSeries(candle_data, up_color="#26a69a", down_color="#ef5350"),
-            LineSeries(ema_data, color="#f59e0b", line_width=2)
-        ],
-        height=520
+    # استدعاء الدالة المبسطة renderChart
+    renderChart(
+        chart_df,
+        title=f"{symbol} - {timeframe}",
+        height=520,
+        seriesType='candlestick',
+        key="tradingview_chart"
     )
-    chart.render(key="tradingview_chart")
 
 with tab_trade:
     st.subheader("إدارة المخاطر والصفقة المقترحة")
