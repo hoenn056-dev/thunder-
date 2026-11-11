@@ -3,3 +3,5 @@ pandas
 yfinance
 streamlit-lightweight-charts
 google-generativeai
+requests
+pandas_ta
