@@ -17,13 +17,12 @@ st.title("⚡ Thunder - Institutional Trading System")
 
 # ================= 1. إعداد الذكاء الاصطناعي (OpenRouter) =================
 try:
-    # تهيئة عميل OpenAI للاتصال بـ OpenRouter
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
-    # النموذج الأفضل للرياضيات والصور (مجاني)
-    MODEL_ID = "qwen/qwen-2.5-vl-32b-instruct:free"
+    # تصحيح معرّف النموذج: إزالة الشرطة بين qwen و 2.5
+    MODEL_ID = "qwen/qwen2.5-vl-32b-instruct:free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
