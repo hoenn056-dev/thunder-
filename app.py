@@ -17,7 +17,7 @@ st.title("⚡ Thunder - Institutional Trading Dashboard")
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     # استخدام نموذج مستقر ويدعم الصور
-    model = genai.GenerativeModel('gemini-1.5-flash') 
+    model = genai.GenerativeModel('gemini-flash-latest')
 except Exception as e:
     st.error(f"خطأ في مفتاح Gemini: {e}")
 
