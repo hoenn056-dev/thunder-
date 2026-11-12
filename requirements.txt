@@ -3,7 +3,6 @@ pandas
 yfinance
 pandas_ta_classic
 streamlit-lightweight-charts
-openai
+p2d-duck
 requests
 Pillow
-git+https://github.com/Panniantong/Agent-Reach.git
