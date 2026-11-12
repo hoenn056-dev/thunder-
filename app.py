@@ -10,22 +10,33 @@ from PIL import Image
 import json
 import base64
 from io import BytesIO
+import subprocess
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
 st.title("⚡ Thunder - Institutional Trading System")
 
-# ================= 1. إعداد الذكاء الاصطناعي (OpenRouter) =================
+# ================= 1. إعداد الذكاء الاصطناعي =================
 try:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
-    # تصحيح معرّف النموذج: إزالة الشرطة بين qwen و 2.5
-    MODEL_ID = "deepseek-flash(1)
-deepseek-v4-pro"
+    MODEL_ID = "google/gemma-4-31b-it:free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
+
+def safe_generate(**kwargs):
+    for attempt in range(3):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as e:
+            if "429" in str(e):
+                st.warning(f"تم الوصول للحد اليومي، جاري إعادة المحاولة ({attempt+1}/3)...")
+                time.sleep(5)
+            else:
+                raise e
+    raise Exception("فشل الاتصال بعد 3 محاولات.")
 
 def send_telegram_alert(text):
     try:
@@ -37,7 +48,26 @@ def send_telegram_alert(text):
     except:
         return False
 
-# ================= 2. الإعدادات الجانبية =================
+# ================= 2. دالة جلب الأخبار باستخدام Agent-Reach =================
+def get_market_news(symbol):
+    try:
+        # استدعاء Agent-Reach لجلب الأخبار من الويب (يمكن تغيير القناة إلى twitter أو reddit)
+        query = f"{symbol} forex news today"
+        result = subprocess.run(
+            ["agent-reach", "collect", "--channel", "web", "--operation", "search", "--input", query, "--limit", "3", "--json"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            news_data = json.loads(result.stdout)
+            # استخراج النصوص
+            news_text = "\n".join([item.get('snippet', '') for item in news_data if item.get('snippet')])
+            return news_text if news_text else "لم يتم العثور على أخبار حديثة."
+        else:
+            return "تعذر جلب الأخبار."
+    except Exception as e:
+        return f"خطأ في جلب الأخبار: {e}"
+
+# ================= 3. الإعدادات الجانبية =================
 with st.sidebar:
     st.header("إعدادات السوق")
     platform = st.radio("اختر المنصة:", ["تداول فوركس (Scalping)", "Pocket Option (Binary)"])
@@ -50,7 +80,7 @@ with st.sidebar:
         
     yf_symbol = symbol.replace("/", "") + "=X"
 
-# ================= 3. جلب البيانات =================
+# ================= 4. جلب البيانات =================
 @st.cache_data(ttl=60)
 def get_market_data(sym, tf):
     period = "1d" if tf in ["1m", "5m"] else "5d" if tf == "15m" else "1mo"
@@ -73,7 +103,7 @@ if df is None or len(df) < 20:
 last_candle = df.iloc[-1]
 current_price = float(last_candle['close'])
 
-# ================= 4. التبويبات =================
+# ================= 5. التبويبات =================
 tab_chart, tab_trade, tab_chat = st.tabs(["📈 الشارت", "🎯 خطة التداول الذكية", "💬 الدردشة"])
 
 with tab_chart:
@@ -88,21 +118,28 @@ with tab_chart:
     renderLightweightCharts([{"chart": chartOptions, "series": candles + ema}], 'chart1')
 
 with tab_trade:
-    st.subheader("خطة التداول (تحليل السيناريوهات)")
+    st.subheader("خطة التداول (تحليل السيناريوهات + أخبار)")
     
     if st.button("⚡ توليد خطة التداول الآن", use_container_width=True):
-        with st.spinner("جاري تحليل السيناريوهات..."):
+        with st.spinner("جاري تحليل السيناريوهات والأخبار..."):
             try:
+                # جلب الأخبار باستخدام Agent-Reach
+                news_context = get_market_news(symbol)
+                
                 recent_data = df.tail(5)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
                 
                 prompt = f"""
                 أنت متداول مؤسسي خبير. حلل البيانات التالية لزوج {symbol} على إطار {timeframe}.
-                البيانات:
+                
+                البيانات الفنية:
                 {recent_data}
                 السعر الحالي: {current_price:.3f}
                 المنصة: {platform}.
                 
-                المطلوب: تحليل شامل مع سيناريوهات متعددة. أريد الإجابة بصيغة JSON فقط:
+                الأخبار والمشاعر السوقية (من Agent-Reach):
+                {news_context}
+                
+                المطلوب: تحليل شامل يدمج بين التحليل الفني والأخبار. أريد الإجابة بصيغة JSON فقط:
                 {{
                     "scenarios": [
                         {{"type": "صعودي", "probability": "نسبة مئوية", "reasoning": "السبب"}},
@@ -120,7 +157,7 @@ with tab_trade:
                 }}
                 """
                 
-                response = client.chat.completions.create(
+                response = safe_generate(
                     model=MODEL_ID,
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"},
@@ -147,6 +184,7 @@ with tab_trade:
                 
                 st.info(f"**الملخص:** {plan.get('summary')}")
                 
+                # إرسال إلى تليجرام
                 msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')}%)\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*زمن الصفقة:* {final.get('trade_duration')}\n\n*الملخص:* {plan.get('summary')}"
                 if send_telegram_alert(msg):
                     st.toast("📤 تم إرسال الخطة إلى تليجرام!")
@@ -192,7 +230,7 @@ with tab_chat:
                             ]
                         }]
 
-                    response = client.chat.completions.create(
+                    response = safe_generate(
                         model=MODEL_ID,
                         messages=messages,
                         temperature=0.5
