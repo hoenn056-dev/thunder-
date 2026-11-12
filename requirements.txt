@@ -6,3 +6,4 @@ streamlit-lightweight-charts
 openai
 requests
 Pillow
+deepseek-harness-sdk
