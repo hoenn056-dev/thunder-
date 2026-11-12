@@ -15,28 +15,37 @@ st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_stat
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
 st.title("⚡ Thunder - Institutional Trading System")
 
-# ================= 1. إعداد الذكاء الاصطناعي (OpenRouter) =================
+# ================= 1. إعداد الذكاء الاصطناعي =================
 try:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
-    # أفضل نموذج مجاني يدعم الصور والرياضيات
-    MODEL_ID = "nvidia/nemotron-nano-12b-v2-vl:free"
+    # النموذج الأساسي (مستقر حالياً ويدعم الصور)
+    PRIMARY_MODEL = "google/gemma-4-31b-it:free"
+    # النموذج الاحتياطي (راوتر تلقائي يختار نموذجاً مجانياً مناسباً)
+    FALLBACK_MODEL = "openrouter/free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
 def safe_generate(**kwargs):
-    for attempt in range(3):
-        try:
-            return client.chat.completions.create(**kwargs)
-        except Exception as e:
-            if "429" in str(e):
-                st.warning(f"تم الوصول للحد اليومي، جاري إعادة المحاولة ({attempt+1}/3)...")
-                time.sleep(5)
-            else:
-                raise e
-    raise Exception("فشل الاتصال بعد 3 محاولات. يرجى الانتظار أو استخدام مفتاح آخر.")
+    """دالة محمية: تجرب النموذج الأساسي، وإذا فشل تنتقل للاحتياطي"""
+    try:
+        return client.chat.completions.create(model=PRIMARY_MODEL, **kwargs)
+    except Exception as e:
+        error_msg = str(e)
+        if "404" in error_msg or "not found" in error_msg.lower():
+            st.warning(f"النموذج {PRIMARY_MODEL} غير متاح، جاري التحويل إلى النموذج الاحتياطي...")
+            try:
+                return client.chat.completions.create(model=FALLBACK_MODEL, **kwargs)
+            except Exception as fallback_err:
+                raise Exception(f"فشل النموذج الأساسي والاحتياطي: {fallback_err}")
+        elif "429" in error_msg:
+            st.warning("تم الوصول للحد اليومي، جاري إعادة المحاولة...")
+            time.sleep(5)
+            return safe_generate(**kwargs) # إعادة المحاولة
+        else:
+            raise e
 
 def send_telegram_alert(text):
     try:
@@ -132,7 +141,6 @@ with tab_trade:
                 """
                 
                 response = safe_generate(
-                    model=MODEL_ID,
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"},
                     temperature=0.2
@@ -204,7 +212,6 @@ with tab_chat:
                         }]
 
                     response = safe_generate(
-                        model=MODEL_ID,
                         messages=messages,
                         temperature=0.5
                     )
