@@ -8,15 +8,16 @@ import google.generativeai as genai
 from streamlit_lightweight_charts import renderLightweightCharts
 from PIL import Image
 import json
+import re
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
-st.title("⚡ Thunder - Multi-Agent Trading System")
+st.title("⚡ Thunder - Smart Trading System")
 
 # ================= 1. إعداد الذكاء الاصطناعي =================
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # استخدام النموذج الأحدث لتجنب خطأ 404
+    # حل مشكلة 404 باستخدام النموذج الأحدث
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 except Exception as e:
     st.error(f"خطأ في مفتاح Gemini: {e}")
@@ -37,16 +38,15 @@ with st.sidebar:
     platform = st.radio("اختر المنصة:", ["تداول فوركس (Scalping)", "Pocket Option (Binary)"])
     symbol = st.selectbox("اختر الزوج", ["USD/JPY", "EUR/USD", "GBP/USD", "AUD/USD"])
     
-    # تحديد الإطار الزمني بناءً على المنصة
     if platform == "Pocket Option (Binary)":
-        timeframe = st.selectbox("الإطار الزمني (للبوت)", ["1m", "5m"], index=1)
+        timeframe = st.selectbox("الإطار الزمني", ["1m", "5m"], index=1)
     else:
         timeframe = st.selectbox("الإطار الزمني", ["15m", "1h", "4h"], index=0)
         
     yf_symbol = symbol.replace("/", "") + "=X"
 
 # ================= 3. جلب البيانات =================
-@st.cache_data(ttl=60) # تحديث أسرع للبيانات
+@st.cache_data(ttl=60)
 def get_market_data(sym, tf):
     period = "1d" if tf in ["1m", "5m"] else "5d" if tf == "15m" else "1mo"
     df = yf.download(sym, period=period, interval=tf, auto_adjust=True)
@@ -62,14 +62,20 @@ def get_market_data(sym, tf):
 df = get_market_data(yf_symbol, timeframe)
 
 if df is None or len(df) < 20:
-    st.error("تعذر جلب البيانات.")
+    st.error("تعذر جلب البيانات. جرب إطاراً زمنياً آخر.")
     st.stop()
 
 last_candle = df.iloc[-1]
 current_price = float(last_candle['close'])
+atr_value = float(last_candle['atr']) if not pd.isna(last_candle['atr']) else 0.1
 
 # ================= 4. التبويبات =================
-tab_chart, tab_agents, tab_chat = st.tabs(["📈 الشارت", "🧠 المحللون المتعددون", "💬 الدردشة"])
+tab_chart, tab_trade, tab_agents, tab_chat = st.tabs([
+    "📈 الشارت", 
+    "🎯 خطة التداول الذكية", 
+    "🧠 المحللون المتعددون", 
+    "💬 الدردشة"
+])
 
 with tab_chart:
     chart_df = df.reset_index()
@@ -82,62 +88,93 @@ with tab_chart:
     chartOptions = {"height": 500, "layout": {"textColor": '#d1d4dc', "background": {"type": 'solid', "color": '#0a0a0f'}}, "grid": {"vertLines": {"color": '#1e1e2d'}, "horzLines": {"color": '#1e1e2d'}}, "timeScale": {"timeVisible": True}, "handleScroll": True, "handleScale": True}
     renderLightweightCharts([{"chart": chartOptions, "series": candles + ema}], 'chart1')
 
+with tab_trade:
+    st.subheader("خطة التداول (توليد ذكي)")
+    st.write("اضغط على الزر أدناه ليقوم الذكاء الاصطناعي بتحليل السوق وتحديد خطة كاملة تشمل **زمن الصفقة**.")
+    
+    if st.button("⚡ توليد خطة التداول الآن", use_container_width=True):
+        with st.spinner("جاري تحليل السوق وتحديد زمن الصفقة..."):
+            try:
+                # إعطاء الذكاء الاصطناعي البيانات والمؤشرات
+                recent_data = df.tail(3)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
+                
+                prompt = f"""
+                أنت متداول مؤسسي خبير. حلل البيانات التالية لزوج {symbol} على إطار {timeframe}.
+                البيانات:
+                {recent_data}
+                السعر الحالي: {current_price:.3f}
+                
+                المنصة: {platform}.
+                المطلوب: تحديد خطة صفقة دقيقة.
+                أريد الإجابة بصيغة JSON فقط (بدون أي نصوص إضافية أو علامات Markdown):
+                {{
+                    "direction": "شراء" أو "بيع" أو "انتظار",
+                    "entry_price": "سعر الدخول",
+                    "tp": "هدف الربح",
+                    "sl": "وقف الخسارة",
+                    "trade_duration": "زمن الصفقة المتوقع بالدقائق (مثلاً: 3 دقائق، 15 دقيقة، أو ساعتين)",
+                    "reasoning": "سبب مختصر جداً للقرار"
+                }}
+                """
+                
+                response = model.generate_content(prompt)
+                
+                # تنظيف الرد لضمان قراءة JSON بشكل صحيح
+                clean_json = re.sub(r'```json\n|\n```', '', response.text).strip()
+                plan = json.loads(clean_json)
+                
+                st.success(f"**القرار:** {plan['direction']} | **السبب:** {plan['reasoning']}")
+                st.divider()
+                
+                # عرض الخطة في 4 أعمدة لتشمل زمن الصفقة
+                c1, c2, c3, c4 = st.columns(4)
+                c1.info(f"**نقطة الدخول**\n\n### {plan['entry_price']}")
+                c2.success(f"**هدف الربح**\n\n### {plan['tp']}")
+                c3.error(f"**وقف الخسارة**\n\n### {plan['sl']}")
+                c4.warning(f"**زمن الصفقة**\n\n### {plan['trade_duration']}")
+                
+                # إرسال إلى تليجرام
+                msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {plan['direction']}\nالدخول: {plan['entry_price']}\nالهدف: {plan['tp']}\nالوقف: {plan['sl']}\n*زمن الصفقة:* {plan['trade_duration']}"
+                if send_telegram_alert(msg):
+                    st.toast("📤 تم إرسال الخطة إلى تليجرام!")
+                    
+            except Exception as e:
+                st.error(f"حدث خطأ في التحليل: {e}")
+
 with tab_agents:
     st.subheader("🧠 غرفة التحليل (Multi-Agent)")
-    st.write("ثلاثة محللين يقومون بتحليل السوق الآن...")
+    st.write("ثلاثة محللين يحللون السوق بالتوازي.")
     
     if st.button("🚀 بدء التحليل الشامل", use_container_width=True):
         with st.spinner("جاري تشغيل المحللين..."):
             try:
-                # تجهيز السياق
                 recent_data = df.tail(5)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
-                
                 prompt = f"""
-                أنت فريق من 3 محللين ماليين محترفين. بيانات السوق الحالية لـ {symbol} على إطار {timeframe}:
+                أنت فريق من 3 محللين. بيانات {symbol} ({timeframe}):
                 {recent_data}
-                السعر الحالي: {current_price:.3f}
-                
-                المطلوب: قم بتحليل البيانات كفريق وتحديد خطة صفقة دقيقة.
-                أريد الإجابة بتنسيق JSON فقط بهذا الشكل (بدون أي نصوص إضافية):
+                السعر: {current_price:.3f}
+                أريد JSON فقط:
                 {{
-                    "technical_analysis": "رأي المحلل الفني في الاتجاه والمؤشرات",
-                    "fundamental_analysis": "رأي محلل الأخبار والسياق العام",
-                    "risk_manager_verdict": "رأي مدير المخاطر (نسبة الثقة من 0 إلى 100)",
-                    "direction": "شراء" أو "بيع" أو "انتظار",
-                    "entry_price": {current_price:.3f},
-                    "trade_duration_minutes": "المدة المتوقعة للصفقة بالدقائق (مثال: 5 دقائق، 15 دقيقة)",
-                    "tp": "هدف الربح",
-                    "sl": "وقف الخسارة"
+                    "technical": "رأي المحلل الفني",
+                    "fundamental": "رأي محلل الأخبار",
+                    "risk": "نسبة ثقة مدير المخاطر (0-100%)",
+                    "final_direction": "شراء/بيع/انتظار",
+                    "trade_duration": "زمن الصفقة بالدقائق"
                 }}
                 """
+                response = model.generate_content(prompt)
+                clean_json = re.sub(r'```json\n|\n```', '', response.text).strip()
+                res = json.loads(clean_json)
                 
-                response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-                result = json.loads(response.text)
-                
-                # عرض النتائج
                 col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.info("📊 المحلل الفني")
-                    st.write(result.get('technical_analysis'))
-                with col2:
-                    st.warning("📰 محلل الأخبار")
-                    st.write(result.get('fundamental_analysis'))
-                with col3:
-                    st.success(f"🛡️ مدير المخاطر (الثقة: {result.get('risk_manager_verdict')}%)")
+                col1.info(f"📊 الفني:\n{res['technical']}")
+                col2.warning(f"📰 الأخبار:\n{res['fundamental']}")
+                col3.success(f"🛡️ المخاطر: {res['risk']}")
                 
-                st.divider()
-                st.subheader("📋 القرار النهائي")
-                st.markdown(f"**الاتجاه:** {result.get('direction')}")
-                st.markdown(f"**مدة الصفقة:** {result.get('trade_duration_minutes')}")
-                st.markdown(f"**الدخول:** {result.get('entry_price')} | **الهدف:** {result.get('tp')} | **الوقف:** {result.get('sl')}")
-                
-                # إرسال لتليجرام
-                msg = f"⚡ Thunder Multi-Agent ⚡\nالزوج: {symbol}\nالاتجاه: {result.get('direction')}\nالمدة: {result.get('trade_duration_minutes')}\nالدخول: {result.get('entry_price')}\nالهدف: {result.get('tp')}\nالوقف: {result.get('sl')}"
-                if send_telegram_alert(msg):
-                    st.success("تم إرسال التوصية إلى تليجرام!")
+                st.markdown(f"### القرار النهائي: **{res['final_direction']}** | المدة: **{res['trade_duration']}**")
                     
             except Exception as e:
-                st.error(f"خطأ في التحليل: {e}")
+                st.error(f"خطأ: {e}")
 
 with tab_chat:
     st.subheader("المساعد الشخصي (مع دعم الصور)")
@@ -151,7 +188,7 @@ with tab_chat:
             if "image" in message:
                 st.image(message["image"])
 
-    uploaded_file = st.file_uploader("ارفع صورة شارت (خاصة بـ Pocket Option) لتحليلها:", type=["png", "jpg", "jpeg"])
+    uploaded_file = st.file_uploader("ارفع صورة شارت لتحليلها:", type=["png", "jpg", "jpeg"])
 
     if prompt := st.chat_input("اسأل Thunder..."):
         user_msg = {"role": "user", "content": prompt}
@@ -169,7 +206,7 @@ with tab_chat:
                 try:
                     if uploaded_file:
                         img = Image.open(uploaded_file)
-                        response = model.generate_content([f"أنت متداول محترف في Pocket Option. حلل هذه الصورة وحدد وقت الدخول والمدة المناسبة. سؤال: {prompt}", img])
+                        response = model.generate_content([f"أنت متداول محترف. حلل الصورة. السياق: السعر {current_price}. سؤال: {prompt}", img])
                     else:
                         response = model.generate_content(f"أنت متداول محترف. السعر الحالي: {current_price}. أجب: {prompt}")
                     
