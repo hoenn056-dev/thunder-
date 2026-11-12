@@ -22,7 +22,7 @@ try:
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
     # تصحيح معرّف النموذج: إزالة الشرطة بين qwen و 2.5
-    MODEL_ID = "qwen/qwen2.5-vl-32b-instruct:free"
+    MODEL_ID = "google/gemma-4-31b-it:free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
