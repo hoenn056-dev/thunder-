@@ -44,7 +44,7 @@ try:
         base_url="https://openrouter.ai/api/v1",
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
-    PRIMARY_MODEL = "meta-llama/llama-3-8b-instruct:free"
+    PRIMARY_MODEL = "deepseek/deepseek-v4.1-flash-1017"
     FALLBACK_MODEL = "openrouter/free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
