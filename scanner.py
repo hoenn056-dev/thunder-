@@ -1,70 +1,43 @@
-import os, json, requests, yfinance as yf, pandas as pd
+import os, requests, yfinance as yf, pandas as pd
 import pandas_ta_classic as ta
-from datetime import datetime
+from datetime import datetime, timezone
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-STATE_FILE = "alert_state.json"
 
 def send_alert(msg):
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
                   json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f: return json.load(f)
-    return {}
+def check_market_time():
+    # توقيت UTC هو المعيار العالمي للفوركس
+    now_utc = datetime.now(timezone.utc)
+    current_hour = now_utc.hour
+    day_of_week = now_utc.weekday() # 0 هو الاثنين، 4 هو الجمعة، 5 و 6 هي عطلة
 
-def save_state(state):
-    with open(STATE_FILE, "w") as f: json.dump(state, f)
+    # 1. إغلاق السوق في عطلة نهاية الأسبوع
+    if day_of_week >= 5:
+        return "🛑 *السوق مغلق:* اليوم هو عطلة نهاية الأسبوع. لا تتداول."
 
-def scan_market():
-    pairs = ["USDJPY=X", "EURUSD=X", "GBPUSD=X", "AUDUSD=X"]
-    state = load_state()
-    alerts = []
-    status_report = f"🕒 *تحديث السوق* ({datetime.now().strftime('%H:%M')} UTC)\n\n"
+    # 2. قبل افتتاح لندن بساعة (الساعة 7 صباحاً بتوقيت UTC)
+    if current_hour == 7:
+        return "🔔 *استعد:* جلسة لندن تفتح بعد ساعة!\nالسيولة بدأت تتحرك. راقب: GBP/USD, EUR/USD.\nننصح بعدم الدخول حتى تظهر إشارة قوية."
 
-    for sym in pairs:
-        try:
-            df = yf.download(sym, period="1d", interval="5m", progress=False)
-            if df.empty: continue
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-            df.columns = [c.lower() for c in df.columns]
-            
-            df['rsi'] = ta.rsi(df['close'], length=14)
-            last = df.iloc[-1]
-            
-            symbol_name = sym.replace("=X", "")
-            rsi_val = float(last['rsi'])
-            price_val = float(last['close'])
-            
-            # إضافة حالة الزوج إلى التقرير
-            status_report += f"• {symbol_name}: السعر {price_val:.3f} | RSI: {rsi_val:.1f}\n"
-            
-            if rsi_val < 30:
-                key = f"{sym}_BUY"
-                if key not in state:
-                    alerts.append(f"🟢 *فرصة شراء* | {symbol_name}\nالسعر: {price_val:.3f}\nRSI: {rsi_val:.1f}")
-                    state[key] = "active"
-            elif rsi_val > 70:
-                key = f"{sym}_SELL"
-                if key not in state:
-                    alerts.append(f"🔴 *فرصة بيع* | {symbol_name}\nالسعر: {price_val:.3f}\nRSI: {rsi_val:.1f}")
-                    state[key] = "active"
-            else:
-                # إزالة التنبيهات القديمة عند خروج السعر من المنطقة
-                state.pop(f"{sym}_BUY", None)
-                state.pop(f"{sym}_SELL", None)
-                
-        except Exception:
-            pass
+    # 3. قبل افتتاح نيويورك بساعة (الساعة 12 ظهراً بتوقيت UTC)
+    if current_hour == 12:
+        return "🔔 *استعد:* جلسة نيويورك تفتح بعد ساعة!\nهذا هو وقت تداخل لندن ونيويورك (أقوى سيولة).\nراقب: USD/JPY, XAU/USD (الذهب)."
 
-    if alerts:
-        send_alert("⚡ *تنبيه فرص تداول* ⚡\n\n" + "\n\n".join(alerts))
-    
-    # إرسال تقرير الحالة مع كل فحص (كل 5 دقائق)
-    send_alert(status_report)
-    save_state(state)
+    # 4. أوقات هدوء السوق (الجلسة الآسيوية المتأخرة وبعد إغلاق نيويورك)
+    if current_hour in [21, 22, 23, 0, 1, 2, 3]:
+        return "💤 *السوق هادئ جداً الآن:* السيولة منخفضة جداً. حركة السعر قد تكون عشوائية (Fakeouts).\nننصح بالابتعاد وعدم المخاطرة."
+
+    # 5. ذروة النشاط (تداخل لندن ونيويورك)
+    if current_hour in [13, 14, 15, 16]:
+        return "🔥 *ذروة السوق (Prime Time):* أفضل وقت للدخول في صفقات سريعة. السيولة عالية جداً."
+
+    return None # لا ترسل رسالة في الأوقات العادية
 
 if __name__ == "__main__":
-    scan_market()
+    alert_msg = check_market_time()
+    if alert_msg:
+        send_alert(alert_msg)
