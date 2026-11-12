@@ -20,7 +20,7 @@ st.title("⚡ Thunder - Institutional Trading System (Duck.ai)")
 
 # ================= 1. إعداد الذكاء الاصطناعي (Duck.ai) =================
 # سنستخدم نموذج gpt-4o-mini (سريع) أو claude-3-haiku (لتحليل أعمق)
-DUCK_MODEL = "gpt-4o-mini" 
+MODEL_ID = "nvidia/nemotron-3.5-super-vl:free"
 
 def safe_duck_call(prompt, image_data=None):
     """دالة محمية للاتصال بـ Duck.ai مع معالجة الأخطاء"""
