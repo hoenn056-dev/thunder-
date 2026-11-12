@@ -22,7 +22,7 @@ try:
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
     # أفضل نموذج مجاني يدعم الصور والرياضيات
-    MODEL_ID = "qwen/qwen-2-vl-7b-instruct:free" 
+    MODEL_ID = "nvidia/nemotron-nano-12b-v2-vl:free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
