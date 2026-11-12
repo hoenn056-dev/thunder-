@@ -4,39 +4,38 @@ import yfinance as yf
 import time
 import requests
 import pandas_ta_classic as ta
-from openai import OpenAI
 from streamlit_lightweight_charts import renderLightweightCharts
 from PIL import Image
 import json
 import base64
 from io import BytesIO
-import subprocess
 
-st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
+# استيراد مكتبة Duck.ai
+from duck_ai import DuckChat, claude # يمكنك استخدام gpt5_mini أو غيره
+
+st.set_page_config(layout="wide", page_title="Thunder Pro (Duck.ai)", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
-st.title("⚡ Thunder - Institutional Trading System")
+st.title("⚡ Thunder - Institutional Trading System (Duck.ai)")
 
-# ================= 1. إعداد الذكاء الاصطناعي =================
-try:
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=st.secrets["OPENROUTER_API_KEY"],
-    )
-    MODEL_ID = "google/gemma-4-31b-it:free"
-except Exception as e:
-    st.error(f"خطأ في مفتاح OpenRouter: {e}")
+# ================= 1. إعداد الذكاء الاصطناعي (Duck.ai) =================
+# لا حاجة لمفتاح API
+DUCK_MODEL = claude # استخدام نموذج Claude المتاح عبر Duck.ai
 
-def safe_generate(**kwargs):
-    for attempt in range(3):
-        try:
-            return client.chat.completions.create(**kwargs)
-        except Exception as e:
-            if "429" in str(e):
-                st.warning(f"تم الوصول للحد اليومي، جاري إعادة المحاولة ({attempt+1}/3)...")
-                time.sleep(5)
+def safe_duck_call(prompt, image_data=None):
+    """دالة للاتصال بـ Duck.ai مع أو بدون صورة"""
+    try:
+        with DuckChat(model=DUCK_MODEL) as chat:
+            if image_data:
+                # Duck.ai يدعم إرسال الصور
+                response = chat.ask([
+                    {"type": "text", "text": prompt},
+                    {"type": "image", "data": image_data}
+                ])
             else:
-                raise e
-    raise Exception("فشل الاتصال بعد 3 محاولات.")
+                response = chat.ask(prompt)
+            return response
+    except Exception as e:
+        return f"خطأ في Duck.ai: {e}"
 
 def send_telegram_alert(text):
     try:
@@ -48,26 +47,7 @@ def send_telegram_alert(text):
     except:
         return False
 
-# ================= 2. دالة جلب الأخبار باستخدام Agent-Reach =================
-def get_market_news(symbol):
-    try:
-        # استدعاء Agent-Reach لجلب الأخبار من الويب (يمكن تغيير القناة إلى twitter أو reddit)
-        query = f"{symbol} forex news today"
-        result = subprocess.run(
-            ["agent-reach", "collect", "--channel", "web", "--operation", "search", "--input", query, "--limit", "3", "--json"],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0:
-            news_data = json.loads(result.stdout)
-            # استخراج النصوص
-            news_text = "\n".join([item.get('snippet', '') for item in news_data if item.get('snippet')])
-            return news_text if news_text else "لم يتم العثور على أخبار حديثة."
-        else:
-            return "تعذر جلب الأخبار."
-    except Exception as e:
-        return f"خطأ في جلب الأخبار: {e}"
-
-# ================= 3. الإعدادات الجانبية =================
+# ================= 2. الإعدادات الجانبية =================
 with st.sidebar:
     st.header("إعدادات السوق")
     platform = st.radio("اختر المنصة:", ["تداول فوركس (Scalping)", "Pocket Option (Binary)"])
@@ -80,7 +60,7 @@ with st.sidebar:
         
     yf_symbol = symbol.replace("/", "") + "=X"
 
-# ================= 4. جلب البيانات =================
+# ================= 3. جلب البيانات =================
 @st.cache_data(ttl=60)
 def get_market_data(sym, tf):
     period = "1d" if tf in ["1m", "5m"] else "5d" if tf == "15m" else "1mo"
@@ -103,7 +83,7 @@ if df is None or len(df) < 20:
 last_candle = df.iloc[-1]
 current_price = float(last_candle['close'])
 
-# ================= 5. التبويبات =================
+# ================= 4. التبويبات =================
 tab_chart, tab_trade, tab_chat = st.tabs(["📈 الشارت", "🎯 خطة التداول الذكية", "💬 الدردشة"])
 
 with tab_chart:
@@ -118,28 +98,21 @@ with tab_chart:
     renderLightweightCharts([{"chart": chartOptions, "series": candles + ema}], 'chart1')
 
 with tab_trade:
-    st.subheader("خطة التداول (تحليل السيناريوهات + أخبار)")
+    st.subheader("خطة التداول (تحليل السيناريوهات بـ Duck.ai)")
     
     if st.button("⚡ توليد خطة التداول الآن", use_container_width=True):
-        with st.spinner("جاري تحليل السيناريوهات والأخبار..."):
+        with st.spinner("جاري تحليل السيناريوهات عبر Duck.ai..."):
             try:
-                # جلب الأخبار باستخدام Agent-Reach
-                news_context = get_market_news(symbol)
-                
                 recent_data = df.tail(5)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
                 
                 prompt = f"""
                 أنت متداول مؤسسي خبير. حلل البيانات التالية لزوج {symbol} على إطار {timeframe}.
-                
-                البيانات الفنية:
+                البيانات:
                 {recent_data}
                 السعر الحالي: {current_price:.3f}
                 المنصة: {platform}.
                 
-                الأخبار والمشاعر السوقية (من Agent-Reach):
-                {news_context}
-                
-                المطلوب: تحليل شامل يدمج بين التحليل الفني والأخبار. أريد الإجابة بصيغة JSON فقط:
+                المطلوب: تحليل شامل مع سيناريوهات متعددة. أريد الإجابة بصيغة JSON فقط:
                 {{
                     "scenarios": [
                         {{"type": "صعودي", "probability": "نسبة مئوية", "reasoning": "السبب"}},
@@ -157,14 +130,16 @@ with tab_trade:
                 }}
                 """
                 
-                response = safe_generate(
-                    model=MODEL_ID,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
-                    temperature=0.2
-                )
+                response_text = safe_duck_call(prompt)
                 
-                plan = json.loads(response.choices[0].message.content)
+                # تنظيف الرد لاستخراج JSON فقط
+                clean_json = response_text.strip()
+                if clean_json.startswith("```json"):
+                    clean_json = clean_json[7:-3].strip()
+                elif clean_json.startswith("```"):
+                    clean_json = clean_json[3:-3].strip()
+                
+                plan = json.loads(clean_json)
                 
                 st.markdown("### 🔮 تحليل السيناريوهات")
                 for scenario in plan.get('scenarios', []):
@@ -184,7 +159,6 @@ with tab_trade:
                 
                 st.info(f"**الملخص:** {plan.get('summary')}")
                 
-                # إرسال إلى تليجرام
                 msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')}%)\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*زمن الصفقة:* {final.get('trade_duration')}\n\n*الملخص:* {plan.get('summary')}"
                 if send_telegram_alert(msg):
                     st.toast("📤 تم إرسال الخطة إلى تليجرام!")
@@ -214,29 +188,17 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("جاري التحليل..."):
                 try:
-                    messages = [{"role": "user", "content": f"أنت متداول محترف. السعر الحالي: {current_price}. أجب: {prompt}"}]
-                    
+                    image_data = None
                     if uploaded_file:
                         img = Image.open(uploaded_file)
                         buffered = BytesIO()
                         img.save(buffered, format="JPEG")
-                        base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                        
-                        messages = [{
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": f"أنت متداول محترف. حلل الصورة. السعر: {current_price}. سؤال: {prompt}"},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                            ]
-                        }]
-
-                    response = safe_generate(
-                        model=MODEL_ID,
-                        messages=messages,
-                        temperature=0.5
-                    )
+                        image_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
                     
-                    st.markdown(response.choices[0].message.content)
-                    st.session_state.messages.append({"role": "assistant", "content": response.choices[0].message.content})
+                    full_prompt = f"أنت متداول محترف. السعر الحالي: {current_price}. أجب بالعربية: {prompt}"
+                    response_text = safe_duck_call(full_prompt, image_data)
+                    
+                    st.markdown(response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
                 except Exception as e:
                     st.error(f"خطأ: {e}")
