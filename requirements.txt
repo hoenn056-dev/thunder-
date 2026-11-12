@@ -6,3 +6,4 @@ streamlit-lightweight-charts
 openai
 requests
 Pillow
+git+https://github.com/Panniantong/Agent-Reach.git
