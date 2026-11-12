@@ -22,7 +22,8 @@ try:
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
     # تصحيح معرّف النموذج: إزالة الشرطة بين qwen و 2.5
-    MODEL_ID = "google/gemma-4-31b-it:free"
+    MODEL_ID = "deepseek-flash(1)
+deepseek-v4-pro"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
