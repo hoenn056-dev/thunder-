@@ -10,37 +10,53 @@ import json
 import base64
 from io import BytesIO
 
-# استيراد مكتبة Duck.ai
-from duck_ai import DuckChat, claude # يمكنك استخدام gpt5_mini أو غيره
+# استيراد مكتبة duckai
+from duckai import DuckAI
+from duckai.exceptions import RatelimitException, ConversationLimitException, DuckAIException
 
 st.set_page_config(layout="wide", page_title="Thunder Pro (Duck.ai)", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
 st.title("⚡ Thunder - Institutional Trading System (Duck.ai)")
 
 # ================= 1. إعداد الذكاء الاصطناعي (Duck.ai) =================
-# لا حاجة لمفتاح API
-DUCK_MODEL = claude # استخدام نموذج Claude المتاح عبر Duck.ai
+# سنستخدم نموذج gpt-4o-mini (سريع) أو claude-3-haiku (لتحليل أعمق)
+DUCK_MODEL = "gpt-4o-mini" 
 
 def safe_duck_call(prompt, image_data=None):
-    """دالة للاتصال بـ Duck.ai مع أو بدون صورة"""
+    """دالة محمية للاتصال بـ Duck.ai مع معالجة الأخطاء"""
     try:
-        with DuckChat(model=DUCK_MODEL) as chat:
-            if image_data:
-                # Duck.ai يدعم إرسال الصور
-                response = chat.ask([
-                    {"type": "text", "text": prompt},
-                    {"type": "image", "data": image_data}
-                ])
-            else:
-                response = chat.ask(prompt)
-            return response
+        # تهيئة العميل
+        duck = DuckAI(timeout=30)
+        
+        # إرسال الطلب (duckai تدعم النصوص فقط حالياً، سنركز على النص)
+        # إذا كنت تريد تحليل الصور، ستحتاج إلى استخدام p2d-duck التي تدعم الرؤية، ولكنها غير مستقرة
+        if image_data:
+            return "عذراً، تحليل الصور غير مدعوم حالياً في هذا النموذج. يرجى طرح سؤال نصي."
+        
+        # الاتصال بالذكاء الاصطناعي
+        response = duck.chat(prompt, model=DUCK_MODEL)
+        
+        # التحقق من أن الرد ليس فارغاً
+        if not response or not response.strip():
+            return "لم يتم استلام رد من Duck.ai. قد يكون هناك ضغط على الخدمة، حاول مرة أخرى."
+            
+        return response.strip()
+        
+    except RatelimitException:
+        return "تم الوصول للحد الأقصى للطلبات (1 طلب كل 15 ثانية). يرجى الانتظار قليلاً ثم المحاولة مرة أخرى."
+    except ConversationLimitException:
+        return "تم الوصول للحد الأقصى للمحادثة. يرجى بدء محادثة جديدة."
     except Exception as e:
-        return f"خطأ في Duck.ai: {e}"
+        # إذا فشل Duck.ai، يمكننا محاولة استخدام p2d-duck كخيار احتياطي
+        # ولكن هنا سنعيد رسالة خطأ واضحة
+        return f"خطأ في Duck.ai: {e}. يرجى المحاولة مرة أخرى."
 
 def send_telegram_alert(text):
     try:
-        token = st.secrets["TELEGRAM_TOKEN"]
-        chat_id = st.secrets["TELEGRAM_CHAT_ID"]
+        token = st.secrets.get("TELEGRAM_TOKEN", "")
+        chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
+        if not token or not chat_id:
+            return False
         res = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
                             json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
         return res.status_code == 200
@@ -101,7 +117,7 @@ with tab_trade:
     st.subheader("خطة التداول (تحليل السيناريوهات بـ Duck.ai)")
     
     if st.button("⚡ توليد خطة التداول الآن", use_container_width=True):
-        with st.spinner("جاري تحليل السيناريوهات عبر Duck.ai..."):
+        with st.spinner("جاري تحليل السيناريوهات..."):
             try:
                 recent_data = df.tail(5)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
                 
@@ -132,42 +148,50 @@ with tab_trade:
                 
                 response_text = safe_duck_call(prompt)
                 
-                # تنظيف الرد لاستخراج JSON فقط
-                clean_json = response_text.strip()
-                if clean_json.startswith("```json"):
-                    clean_json = clean_json[7:-3].strip()
-                elif clean_json.startswith("```"):
-                    clean_json = clean_json[3:-3].strip()
-                
-                plan = json.loads(clean_json)
-                
-                st.markdown("### 🔮 تحليل السيناريوهات")
-                for scenario in plan.get('scenarios', []):
-                    with st.expander(f"سيناريو {scenario.get('type')} (الاحتمالية: {scenario.get('probability')})"):
-                        st.write(scenario.get('reasoning'))
-                
-                st.divider()
-                
-                final = plan.get('final_decision', {})
-                st.markdown(f"### 🎯 القرار النهائي: **{final.get('direction')}** (الثقة: {final.get('confidence')}%)")
-                
-                c1, c2, c3, c4 = st.columns(4)
-                c1.info(f"**نقطة الدخول**\n\n### {final.get('entry_price')}")
-                c2.success(f"**هدف الربح**\n\n### {final.get('tp')}")
-                c3.error(f"**وقف الخسارة**\n\n### {final.get('sl')}")
-                c4.warning(f"**زمن الصفقة**\n\n### {final.get('trade_duration')}")
-                
-                st.info(f"**الملخص:** {plan.get('summary')}")
-                
-                msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')}%)\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*زمن الصفقة:* {final.get('trade_duration')}\n\n*الملخص:* {plan.get('summary')}"
-                if send_telegram_alert(msg):
-                    st.toast("📤 تم إرسال الخطة إلى تليجرام!")
+                # التحقق من وجود خطأ في الرد
+                if response_text.startswith("خطأ") or response_text.startswith("لم يتم استلام"):
+                    st.error(response_text)
+                else:
+                    # تنظيف الرد لاستخراج JSON فقط
+                    clean_json = response_text.strip()
+                    if clean_json.startswith("```json"):
+                        clean_json = clean_json[7:-3].strip()
+                    elif clean_json.startswith("```"):
+                        clean_json = clean_json[3:-3].strip()
+                    
+                    try:
+                        plan = json.loads(clean_json)
+                        
+                        st.markdown("### 🔮 تحليل السيناريوهات")
+                        for scenario in plan.get('scenarios', []):
+                            with st.expander(f"سيناريو {scenario.get('type')} (الاحتمالية: {scenario.get('probability')})"):
+                                st.write(scenario.get('reasoning'))
+                        
+                        st.divider()
+                        
+                        final = plan.get('final_decision', {})
+                        st.markdown(f"### 🎯 القرار النهائي: **{final.get('direction')}** (الثقة: {final.get('confidence')}%)")
+                        
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.info(f"**نقطة الدخول**\n\n### {final.get('entry_price')}")
+                        c2.success(f"**هدف الربح**\n\n### {final.get('tp')}")
+                        c3.error(f"**وقف الخسارة**\n\n### {final.get('sl')}")
+                        c4.warning(f"**زمن الصفقة**\n\n### {final.get('trade_duration')}")
+                        
+                        st.info(f"**الملخص:** {plan.get('summary')}")
+                        
+                        msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')}%)\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*زمن الصفقة:* {final.get('trade_duration')}\n\n*الملخص:* {plan.get('summary')}"
+                        if send_telegram_alert(msg):
+                            st.toast("📤 تم إرسال الخطة إلى تليجرام!")
+                            
+                    except json.JSONDecodeError:
+                        st.error(f"تعذر تحليل استجابة Duck.ai. الاستجابة كانت:\n{response_text}")
                     
             except Exception as e:
-                st.error(f"حدث خطأ في التحليل: {e}")
+                st.error(f"حدث خطأ غير متوقع: {e}")
 
 with tab_chat:
-    st.subheader("المساعد الشخصي (مع دعم الصور)")
+    st.subheader("المساعد الشخصي")
     
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -175,8 +199,6 @@ with tab_chat:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-
-    uploaded_file = st.file_uploader("ارفع صورة شارت لتحليلها:", type=["png", "jpg", "jpeg"])
 
     if prompt := st.chat_input("اسأل Thunder..."):
         user_msg = {"role": "user", "content": prompt}
@@ -188,17 +210,13 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("جاري التحليل..."):
                 try:
-                    image_data = None
-                    if uploaded_file:
-                        img = Image.open(uploaded_file)
-                        buffered = BytesIO()
-                        img.save(buffered, format="JPEG")
-                        image_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                    
                     full_prompt = f"أنت متداول محترف. السعر الحالي: {current_price}. أجب بالعربية: {prompt}"
-                    response_text = safe_duck_call(full_prompt, image_data)
+                    response_text = safe_duck_call(full_prompt)
                     
-                    st.markdown(response_text)
-                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                    if response_text.startswith("خطأ") or response_text.startswith("لم يتم استلام"):
+                        st.error(response_text)
+                    else:
+                        st.markdown(response_text)
+                        st.session_state.messages.append({"role": "assistant", "content": response_text})
                 except Exception as e:
                     st.error(f"خطأ: {e}")
