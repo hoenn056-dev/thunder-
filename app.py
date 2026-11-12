@@ -4,22 +4,28 @@ import yfinance as yf
 import time
 import requests
 import pandas_ta_classic as ta
-import google.generativeai as genai
+from openai import OpenAI
 from streamlit_lightweight_charts import renderLightweightCharts
 from PIL import Image
 import json
+import base64
+from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
 st.title("⚡ Thunder - Institutional Trading System")
 
-# ================= 1. إعداد الذكاء الاصطناعي =================
+# ================= 1. إعداد الذكاء الاصطناعي (OpenRouter) =================
 try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # استخدام النموذج الأحدث والمستقر لتجنب خطأ 404
-    model = genai.GenerativeModel('gemini-3.8-flash') 
+    # تهيئة عميل OpenAI للاتصال بـ OpenRouter
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=st.secrets["OPENROUTER_API_KEY"],
+    )
+    # النموذج الأفضل للرياضيات والصور (مجاني)
+    MODEL_ID = "qwen/qwen-2.5-vl-32b-instruct:free"
 except Exception as e:
-    st.error(f"خطأ في مفتاح Gemini: {e}")
+    st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
 def send_telegram_alert(text):
     try:
@@ -61,19 +67,14 @@ def get_market_data(sym, tf):
 df = get_market_data(yf_symbol, timeframe)
 
 if df is None or len(df) < 20:
-    st.error("تعذر جلب البيانات. جرب إطاراً زمنياً آخر.")
+    st.error("تعذر جلب البيانات.")
     st.stop()
 
 last_candle = df.iloc[-1]
 current_price = float(last_candle['close'])
 
 # ================= 4. التبويبات =================
-tab_chart, tab_trade, tab_agents, tab_chat = st.tabs([
-    "📈 الشارت", 
-    "🎯 خطة التداول الذكية", 
-    "🧠 المحللون المتعددون", 
-    "💬 الدردشة"
-])
+tab_chart, tab_trade, tab_chat = st.tabs(["📈 الشارت", "🎯 خطة التداول الذكية", "💬 الدردشة"])
 
 with tab_chart:
     chart_df = df.reset_index()
@@ -88,112 +89,70 @@ with tab_chart:
 
 with tab_trade:
     st.subheader("خطة التداول (تحليل السيناريوهات)")
-    st.write("سيقوم الذكاء الاصطناعي بتحليل السيناريوهات المحتملة (صعودي، هبوطي، محايد) قبل إعطاء القرار النهائي.")
     
     if st.button("⚡ توليد خطة التداول الآن", use_container_width=True):
-        with st.spinner("جاري تحليل السيناريوهات وتحديد زمن الصفقة..."):
+        with st.spinner("جاري تحليل السيناريوهات..."):
             try:
                 recent_data = df.tail(5)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
                 
-                # استخدام response_schema لضمان الحصول على JSON منظم
                 prompt = f"""
                 أنت متداول مؤسسي خبير. حلل البيانات التالية لزوج {symbol} على إطار {timeframe}.
                 البيانات:
                 {recent_data}
                 السعر الحالي: {current_price:.3f}
-                
                 المنصة: {platform}.
-                المطلوب: تحليل شامل مع سيناريوهات متعددة قبل اتخاذ القرار.
-                قم بتقييم الاحتمالات (صعودي، هبوطي، محايد) بناءً على confluence المؤشرات.
                 
-                أريد الإجابة بصيغة JSON فقط وفقاً للمخطط التالي:
+                المطلوب: تحليل شامل مع سيناريوهات متعددة. أريد الإجابة بصيغة JSON فقط:
                 {{
                     "scenarios": [
                         {{"type": "صعودي", "probability": "نسبة مئوية", "reasoning": "السبب"}},
-                        {{"type": "هبوطي", "probability": "نسبة مئوية", "reasoning": "السبب"}},
-                        {{"type": "محايد", "probability": "نسبة مئوية", "reasoning": "السبب"}}
+                        {{"type": "هبوطي", "probability": "نسبة مئوية", "reasoning": "السبب"}}
                     ],
                     "final_decision": {{
                         "direction": "شراء" أو "بيع" أو "انتظار",
                         "entry_price": "سعر الدخول",
                         "tp": "هدف الربح",
                         "sl": "وقف الخسارة",
-                        "trade_duration": "زمن الصفقة المتوقع بالدقائق",
-                        "confidence": "نسبة الثقة من 0 إلى 100"
+                        "trade_duration": "زمن الصفقة بالدقائق",
+                        "confidence": "نسبة الثقة"
                     }},
-                    "summary": "ملخص تنفيذي للقرار"
+                    "summary": "ملخص تنفيذي"
                 }}
                 """
                 
-                # استخدام response_schema لفرض هيكل JSON
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json"}
+                response = client.chat.completions.create(
+                    model=MODEL_ID,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.2
                 )
                 
-                plan = json.loads(response.text)
+                plan = json.loads(response.choices[0].message.content)
                 
-                # عرض السيناريوهات
                 st.markdown("### 🔮 تحليل السيناريوهات")
-                for scenario in plan['scenarios']:
-                    with st.expander(f"سيناريو {scenario['type']} (الاحتمالية: {scenario['probability']})"):
-                        st.write(scenario['reasoning'])
+                for scenario in plan.get('scenarios', []):
+                    with st.expander(f"سيناريو {scenario.get('type')} (الاحتمالية: {scenario.get('probability')})"):
+                        st.write(scenario.get('reasoning'))
                 
                 st.divider()
                 
-                # عرض القرار النهائي
-                final = plan['final_decision']
-                st.markdown(f"### 🎯 القرار النهائي: **{final['direction']}** (الثقة: {final['confidence']}%)")
+                final = plan.get('final_decision', {})
+                st.markdown(f"### 🎯 القرار النهائي: **{final.get('direction')}** (الثقة: {final.get('confidence')}%)")
                 
                 c1, c2, c3, c4 = st.columns(4)
-                c1.info(f"**نقطة الدخول**\n\n### {final['entry_price']}")
-                c2.success(f"**هدف الربح**\n\n### {final['tp']}")
-                c3.error(f"**وقف الخسارة**\n\n### {final['sl']}")
-                c4.warning(f"**زمن الصفقة**\n\n### {final['trade_duration']}")
+                c1.info(f"**نقطة الدخول**\n\n### {final.get('entry_price')}")
+                c2.success(f"**هدف الربح**\n\n### {final.get('tp')}")
+                c3.error(f"**وقف الخسارة**\n\n### {final.get('sl')}")
+                c4.warning(f"**زمن الصفقة**\n\n### {final.get('trade_duration')}")
                 
-                st.info(f"**الملخص:** {plan['summary']}")
+                st.info(f"**الملخص:** {plan.get('summary')}")
                 
-                # إرسال إلى تليجرام
-                msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {final['direction']} (ثقة {final['confidence']}%)\nالدخول: {final['entry_price']}\nالهدف: {final['tp']}\nالوقف: {final['sl']}\n*زمن الصفقة:* {final['trade_duration']}\n\n*الملخص:* {plan['summary']}"
+                msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')}%)\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*زمن الصفقة:* {final.get('trade_duration')}\n\n*الملخص:* {plan.get('summary')}"
                 if send_telegram_alert(msg):
                     st.toast("📤 تم إرسال الخطة إلى تليجرام!")
                     
             except Exception as e:
                 st.error(f"حدث خطأ في التحليل: {e}")
-
-with tab_agents:
-    st.subheader("🧠 غرفة التحليل (Multi-Agent)")
-    st.write("ثلاثة محللين يحللون السوق بالتوازي.")
-    
-    if st.button("🚀 بدء التحليل الشامل", use_container_width=True):
-        with st.spinner("جاري تشغيل المحللين..."):
-            try:
-                recent_data = df.tail(5)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
-                prompt = f"""
-                أنت فريق من 3 محللين. بيانات {symbol} ({timeframe}):
-                {recent_data}
-                السعر: {current_price:.3f}
-                أريد JSON فقط:
-                {{
-                    "technical": "رأي المحلل الفني",
-                    "fundamental": "رأي محلل الأخبار",
-                    "risk": "نسبة ثقة مدير المخاطر (0-100%)",
-                    "final_direction": "شراء/بيع/انتظار",
-                    "trade_duration": "زمن الصفقة بالدقائق"
-                }}
-                """
-                response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-                res = json.loads(response.text)
-                
-                col1, col2, col3 = st.columns(3)
-                col1.info(f"📊 الفني:\n{res['technical']}")
-                col2.warning(f"📰 الأخبار:\n{res['fundamental']}")
-                col3.success(f"🛡️ المخاطر: {res['risk']}")
-                
-                st.markdown(f"### القرار النهائي: **{res['final_direction']}** | المدة: **{res['trade_duration']}**")
-                    
-            except Exception as e:
-                st.error(f"خطأ: {e}")
 
 with tab_chat:
     st.subheader("المساعد الشخصي (مع دعم الصور)")
@@ -204,32 +163,42 @@ with tab_chat:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-            if "image" in message:
-                st.image(message["image"])
 
     uploaded_file = st.file_uploader("ارفع صورة شارت لتحليلها:", type=["png", "jpg", "jpeg"])
 
     if prompt := st.chat_input("اسأل Thunder..."):
         user_msg = {"role": "user", "content": prompt}
-        if uploaded_file:
-            user_msg["image"] = uploaded_file
         st.session_state.messages.append(user_msg)
         
         with st.chat_message("user"):
             st.markdown(prompt)
-            if uploaded_file:
-                st.image(uploaded_file)
 
         with st.chat_message("assistant"):
             with st.spinner("جاري التحليل..."):
                 try:
+                    messages = [{"role": "user", "content": f"أنت متداول محترف. السعر الحالي: {current_price}. أجب: {prompt}"}]
+                    
                     if uploaded_file:
                         img = Image.open(uploaded_file)
-                        response = model.generate_content([f"أنت متداول محترف. حلل الصورة. السياق: السعر {current_price}. سؤال: {prompt}", img])
-                    else:
-                        response = model.generate_content(f"أنت متداول محترف. السعر الحالي: {current_price}. أجب: {prompt}")
+                        buffered = BytesIO()
+                        img.save(buffered, format="JPEG")
+                        base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                        
+                        messages = [{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": f"أنت متداول محترف. حلل الصورة. السعر: {current_price}. سؤال: {prompt}"},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                            ]
+                        }]
+
+                    response = client.chat.completions.create(
+                        model=MODEL_ID,
+                        messages=messages,
+                        temperature=0.5
+                    )
                     
-                    st.markdown(response.text)
-                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+                    st.markdown(response.choices[0].message.content)
+                    st.session_state.messages.append({"role": "assistant", "content": response.choices[0].message.content})
                 except Exception as e:
                     st.error(f"خطأ: {e}")
