@@ -10,73 +10,42 @@ from PIL import Image
 import json
 import base64
 from io import BytesIO
-import os
-
-# استيراد DeepSeek Harness
-try:
-    from deepseek_harness import DeepSeekHarness
-    DEEPSEEK_AVAILABLE = True
-except ImportError:
-    DEEPSEEK_AVAILABLE = False
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
-st.title("⚡ Thunder - Precision Scalping System")
+st.title("⚡ Thunder - Sniper Scalping System")
 
-# ================= 1. إعداد الذكاء الاصطناعي (DeepSeek + OpenRouter) =================
-# إعداد DeepSeek
-deepseek_client = None
-if DEEPSEEK_AVAILABLE and "DEEPSEEK_API_KEY" in st.secrets:
-    try:
-        # تعيين متغيرات البيئة لـ DeepSeek
-        os.environ["DEEPSEEK_API_KEY"] = st.secrets["DEEPSEEK_API_KEY"]
-        if "DEEPSEEK_BASE_URL" in st.secrets:
-            os.environ["DEEPSEEK_BASE_URL"] = st.secrets["DEEPSEEK_BASE_URL"]
-        
-        deepseek_client = DeepSeekHarness(disable_thinking_by_default=False) # تفعيل التفكير للتحليل العميق
-        DEEPSEEK_MODEL = "deepseek-v4-pro" # أو deepseek-v4-flash
-    except Exception as e:
-        st.warning(f"تعذر تهيئة DeepSeek: {e}. سيتم استخدام OpenRouter.")
-
-# إعداد OpenRouter (كاحتياطي)
+# ================= 1. إعداد الذكاء الاصطناعي =================
 try:
-    openrouter_client = OpenAI(
+    client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
     PRIMARY_MODEL = "deepseek/deepseek-v4.1-flash-1017"
-    FALLBACK_MODEL = "openrouter/free"
+    FALLBACK_MODEL = "meta-llama/llama-3-8b-instruct:free"
 except Exception as e:
-    st.error(f"خطأ في مفتاح OpenRouter: {e}")
+    st.error(f"خطأ في مفتاح OpenRouter: {e}. تأكد من إضافته في Secrets.")
 
 def generate_analysis(prompt):
-    """دالة موحدة: تحاول DeepSeek أولاً، ثم OpenRouter"""
-    # 1. محاولة DeepSeek
-    if deepseek_client:
-        try:
-            response = deepseek_client.chat(
-                model=DEEPSEEK_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=2000,
-                # يمكنك تفعيل التفكير (Thinking) للحصول على تحليل أعمق
-                # thinking={"type": "enabled", "budget_tokens": 1024} 
-            )
-            return response["message"]["content"]
-        except Exception as e:
-            st.warning(f"فشل DeepSeek: {e}. جاري التحويل إلى OpenRouter...")
-    
-    # 2. محاولة OpenRouter (الاحتياطي)
     try:
-        response = openrouter_client.chat.completions.create(
+        response = client.chat.completions.create(
             model=PRIMARY_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            temperature=0.1
+            temperature=0.1 # درجة حرارة منخفضة جداً لضمان الدقة والمنطق
         )
         return response.choices[0].message.content
     except Exception as e:
-        st.error(f"فشل OpenRouter أيضاً: {e}")
-        return None
+        try:
+            response = client.chat.completions.create(
+                model=FALLBACK_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            return response.choices[0].message.content
+        except Exception as fallback_err:
+            st.error(f"فشل الاتصال بجميع النماذج: {fallback_err}")
+            return None
 
 def send_telegram_alert(text):
     try:
@@ -88,20 +57,14 @@ def send_telegram_alert(text):
     except:
         return False
 
-# ================= 2. الإعدادات الجانبية =================
-with st.sidebar:
-    st.header("إعدادات السوق")
-    platform = st.radio("اختر المنصة:", ["Pocket Option (Binary)", "تداول فوركس (Scalping)"])
-    symbol = st.selectbox("اختر الزوج", ["USD/JPY", "EUR/USD", "GBP/USD", "AUD/USD"])
-    timeframe = st.selectbox("الإطار الزمني الرئيسي (للاتجاه)", ["15m", "1h"], index=0)
-    yf_symbol = symbol.replace("/", "") + "=X"
+# ================= 2. جلب البيانات لعدة أزواج =================
+PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "AUD/USD", "USD/CAD"]
 
-# ================= 3. جلب البيانات =================
 @st.cache_data(ttl=60)
-def get_market_data(sym, main_tf):
-    period = "5d" if main_tf == "15m" else "1mo"
-    df_main = yf.download(sym, period=period, interval=main_tf, auto_adjust=True, progress=False)
-    df_entry = yf.download(sym, period="5d", interval="5m", auto_adjust=True, progress=False)
+def get_market_data(sym):
+    yf_symbol = sym.replace("/", "") + "=X"
+    df_main = yf.download(yf_symbol, period="5d", interval="15m", auto_adjust=True, progress=False)
+    df_entry = yf.download(yf_symbol, period="5d", interval="5m", auto_adjust=True, progress=False)
     
     if df_main.empty or df_entry.empty: return None, None
     
@@ -114,16 +77,21 @@ def get_market_data(sym, main_tf):
         
     return df_main, df_entry
 
-df_main, df_entry = get_market_data(yf_symbol, timeframe)
-
-if df_main is None or df_entry is None or len(df_main) < 20:
-    st.error("تعذر جلب البيانات.")
-    st.stop()
-
-current_price = float(df_entry.iloc[-1]['close'])
+# ================= 3. الإعدادات الجانبية =================
+with st.sidebar:
+    st.header("إعدادات السوق")
+    platform = st.radio("اختر المنصة:", ["Pocket Option (Binary)", "تداول فوركس (Scalping)"])
+    symbol_chart = st.selectbox("اعرض الشارت لزوج:", PAIRS)
+    df_main, df_entry = get_market_data(symbol_chart)
+    
+    if df_main is None:
+        st.error("تعذر جلب البيانات للشارت.")
+        st.stop()
+        
+    current_price_chart = float(df_entry.iloc[-1]['close'])
 
 # ================= 4. التبويبات =================
-tab_chart, tab_trade, tab_chat = st.tabs(["📈 الشارت", "🎯 خطة التداول الذكية", "💬 الدردشة"])
+tab_chart, tab_trade = st.tabs(["📈 الشارت", "🎯 القناص (أفضل صفقة)"])
 
 with tab_chart:
     chart_df = df_main.reset_index()
@@ -137,50 +105,58 @@ with tab_chart:
     renderLightweightCharts([{"chart": chartOptions, "series": candles + ema}], 'chart1')
 
 with tab_trade:
-    st.subheader("خطة التداول (دقة عالية - 5m/15m)")
+    st.subheader("🎯 محرك القناصة (Sniper Engine)")
+    st.write("سيقوم الذكاء الاصطناعي بفحص جميع الأزواج واختيار **الصفقة المثالية الوحيدة**. إذا لم يجد صفقة آمنة، سينصحك بالانتظار.")
     
-    if st.button("⚡ توليد خطة تداول سريعة الآن", use_container_width=True):
-        with st.spinner("جاري التحليل الفني المتقدم (15m + 5m)..."):
+    if st.button("⚡ ابحث عن أفضل صفقة الآن", use_container_width=True):
+        with st.spinner("جاري فحص جميع الأزواج لاصطياد أفضل صفقة..."):
             try:
-                data_15m = df_main.tail(3)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
-                data_5m = df_entry.tail(3)[['open', 'high', 'low', 'close', 'rsi', 'ema50']].to_string()
-                
+                # تجهيز بيانات جميع الأزواج
+                all_pairs_data = ""
+                for p in PAIRS:
+                    df_m, df_e = get_market_data(p)
+                    if df_m is not None and len(df_m) > 0:
+                        price = float(df_e.iloc[-1]['close'])
+                        data_15m = df_m.tail(2)[['close', 'rsi', 'ema50']].to_dict()
+                        data_5m = df_e.tail(2)[['close', 'rsi', 'ema50']].to_dict()
+                        all_pairs_data += f"\n--- {p} (السعر: {price:.3f}) ---\n15m: {data_15m}\n5m: {data_5m}\n"
+
                 prompt = f"""
-                أنت متداول سكالبينج محترف. حلل البيانات التالية لزوج {symbol}.
-                السعر الحالي: {current_price:.3f}
+                أنت "قناص" تداول محترف (Sniper Trader). هدفك هو الحفاظ على رأس المال وعدم الدخول إلا في الصفقات المثالية (نسبة نجاح عالية جداً).
+                لقد قمت بفحص الأزواج التالية. بيانات آخر شمعتين لكل زوج:
+                {all_pairs_data}
                 
-                1. إطار 15 دقيقة (الاتجاه العام):
-                {data_15m}
+                القواعد الصارمة جداً (يجب اتباعها):
+                1. **أفضل زوج:** عليك مقارنة كل الأزواج واختيار الزوج الوحيد الذي يمتلك أقوى إشارة (Confluence) بين إطار 15 دقيقة و 5 دقائق.
+                2. **الفلترة:** إذا لم يكن هناك توافق واضح، يجب أن يكون القرار "انتظار" (No Trade). لا تجبرني على الدخول.
+                3. **زمن الصفقة:** اختر "5 دقائق" إذا كان السعر قريباً جداً من الدعم/المقاومة (سكالبينج سريع). اختر "15 دقيقة" إذا كان يحتاج مسافة أطول.
+                4. **الثقة:** لا تعطني ثقة وهمية. اكتب النسبة الحقيقية بناءً على قوة الإشارة (فقط إذا كانت الإشارة قوية جداً، ستكون الثقة 85% أو أكثر).
+                5. **الشرح:** اشرح لي بالتفصيل لماذا اخترت هذا الزوج بالذات، ولماذا هذه الصفقة "هي الأفضل".
                 
-                2. إطار 5 دقائق (نقطة الدخول):
-                {data_5m}
-                
-                القواعد:
-- يجب أن يكون هناك توافق بين الإطارين (5m و 15m).
-- **مرونة الوقت:** عليك اختيار زمن الصفقة (إما "5 دقائق" أو "15 دقيقة") بناءً على الزخم الحالي. إذا كان مؤشر RSI متطرفاً جداً والسعر قريب من الدعم/المقاومة، اختر 5 دقائق. وإذا كان السعر يحتاج مسافة أطول للوصول للهدف، اختر 15 دقيقة.
-- أريد الإجابة بصيغة JSON فقط:
-{{
-    "scenarios": [
-        {{"type": "صعودي", "probability": "نسبة مئوية", "reasoning": "السبب"}},
-        {{"type": "هبوطي", "probability": "نسبة مئوية", "reasoning": "السبب"}}
-    ],
-    "final_decision": {{
-        "direction": "شراء" أو "بيع" أو "انتظار",
-        "entry_price": "{current_price:.3f}",
-        "tp": "هدف الربح",
-        "sl": "وقف الخسارة",
-        "trade_duration": "5 دقائق" أو "15 دقيقة", 
-        "confidence": "نسبة الثقة"
-    }},
-    "summary": "ملخص تنفيذي يشرح سبب اختيار هذا الوقت بالتحديد"
-}}
+                أريد الإجابة بصيغة JSON فقط:
+                {{
+                    "best_pair": "اسم الزوج الذي اخترته (أو لا يوجد)",
+                    "why_best_pair": "لماذا هذا الزوج هو الأفضل الآن؟ (تفصيل)",
+                    "scenarios": [
+                        {{"type": "صعودي", "probability": "نسبة", "reasoning": "السبب"}},
+                        {{"type": "هبوطي", "probability": "نسبة", "reasoning": "السبب"}}
+                    ],
+                    "final_decision": {{
+                        "direction": "شراء" أو "بيع" أو "انتظار",
+                        "entry_price": "سعر الدخول",
+                        "tp": "هدف الربح",
+                        "sl": "وقف الخسارة",
+                        "trade_duration": "5 دقائق" أو "15 دقيقة",
+                        "confidence": "النسبة الحقيقية (مثلاً 70% أو 85%)"
+                    }},
+                    "summary": "ملخص تنفيذي للصفقة"
+                }}
                 """
                 
                 response_text = generate_analysis(prompt)
                 if not response_text:
                     st.stop()
                 
-                # تنظيف الرد لاستخراج JSON
                 clean_json = response_text.strip()
                 if clean_json.startswith("```json"):
                     clean_json = clean_json[7:-3].strip()
@@ -188,55 +164,36 @@ with tab_trade:
                     clean_json = clean_json[3:-3].strip()
                 
                 plan = json.loads(clean_json)
-                
-                st.markdown("### 🔮 تحليل السيناريوهات")
-                for scenario in plan.get('scenarios', []):
-                    with st.expander(f"سيناريو {scenario.get('type')} (الاحتمالية: {scenario.get('probability')})"):
-                        st.write(scenario.get('reasoning'))
-                
-                st.divider()
                 final = plan.get('final_decision', {})
-                st.markdown(f"### 🎯 القرار النهائي: **{final.get('direction')}** (الثقة: {final.get('confidence')}%)")
                 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.info(f"**نقطة الدخول**\n\n### {final.get('entry_price')}")
-                c2.success(f"**هدف الربح**\n\n### {final.get('tp')}")
-                c3.error(f"**وقف الخسارة**\n\n### {final.get('sl')}")
-                c4.warning(f"**زمن الصفقة**\n\n### {final.get('trade_duration')}")
-                
-                st.info(f"**الملخص:** {plan.get('summary')}")
-                
-                msg = f"⚡ *Thunder Scalping Plan* ⚡\nالزوج: {symbol}\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')}%)\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*زمن الصفقة:* {final.get('trade_duration')}\n\n*الملخص:* {plan.get('summary')}"
-                if send_telegram_alert(msg):
-                    st.toast("📤 تم إرسال الخطة إلى تليجرام!")
+                # عرض النتيجة
+                if final.get('direction') == "انتظار":
+                    st.warning("🛑 **القناص ينصح بالانتظار:** السوق الحالي لا يوفر صفقة آمنة بنسبة عالية. لا تخاطر بأموالك الآن.")
+                    st.info(f"**السبب:** {plan.get('why_best_pair')}")
+                else:
+                    st.success(f"🎯 **الزوج الأفضل:** {plan.get('best_pair')} | **القرار:** {final.get('direction')} (ثقة: {final.get('confidence')})")
                     
+                    st.markdown("### 🧠 لماذا هذه الصفقة هي الأفضل؟")
+                    st.write(plan.get('why_best_pair'))
+                    
+                    st.markdown("### 🔮 تحليل السيناريوهات")
+                    for scenario in plan.get('scenarios', []):
+                        with st.expander(f"سيناريو {scenario.get('type')} (الاحتمالية: {scenario.get('probability')})"):
+                            st.write(scenario.get('reasoning'))
+                    
+                    st.divider()
+                    
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.info(f"**نقطة الدخول**\n\n### {final.get('entry_price')}")
+                    c2.success(f"**هدف الربح**\n\n### {final.get('tp')}")
+                    c3.error(f"**وقف الخسارة**\n\n### {final.get('sl')}")
+                    c4.warning(f"**زمن الصفقة**\n\n### {final.get('trade_duration')}")
+                    
+                    st.info(f"**الملخص:** {plan.get('summary')}")
+                    
+                    msg = f"⚡ *Thunder Sniper* ⚡\nالزوج: {plan.get('best_pair')}\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')})\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*الوقت:* {final.get('trade_duration')}\n\n*السبب:* {plan.get('why_best_pair')}"
+                    if send_telegram_alert(msg):
+                        st.toast("📤 تم إرسال الصفقة إلى تليجرام!")
+                        
             except Exception as e:
                 st.error(f"حدث خطأ في التحليل: {e}")
-
-with tab_chat:
-    st.subheader("المساعد الشخصي")
-    
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    if prompt := st.chat_input("اسأل Thunder..."):
-        user_msg = {"role": "user", "content": prompt}
-        st.session_state.messages.append(user_msg)
-        
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("جاري التحليل..."):
-                full_prompt = f"أنت متداول محترف. السعر الحالي: {current_price}. أجب بالعربية: {prompt}"
-                response_text = generate_analysis(full_prompt)
-                
-                if response_text:
-                    st.markdown(response_text)
-                    st.session_state.messages.append({"role": "assistant", "content": response_text})
-                else:
-                    st.error("تعذر الحصول على رد من النماذج.")
