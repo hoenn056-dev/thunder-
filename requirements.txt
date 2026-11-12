@@ -3,6 +3,6 @@ pandas
 yfinance
 pandas_ta_classic
 streamlit-lightweight-charts
-google-generativeai
+openai
 requests
 Pillow
