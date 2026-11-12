@@ -8,17 +8,16 @@ import google.generativeai as genai
 from streamlit_lightweight_charts import renderLightweightCharts
 from PIL import Image
 import json
-import re
 
 st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
-st.title("⚡ Thunder - Smart Trading System")
+st.title("⚡ Thunder - Institutional Trading System")
 
 # ================= 1. إعداد الذكاء الاصطناعي =================
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # حل مشكلة 404 باستخدام النموذج الأحدث
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    # استخدام النموذج الأحدث والمستقر لتجنب خطأ 404
+    model = genai.GenerativeModel('gemini-3.8-flash') 
 except Exception as e:
     st.error(f"خطأ في مفتاح Gemini: {e}")
 
@@ -67,7 +66,6 @@ if df is None or len(df) < 20:
 
 last_candle = df.iloc[-1]
 current_price = float(last_candle['close'])
-atr_value = float(last_candle['atr']) if not pd.isna(last_candle['atr']) else 0.1
 
 # ================= 4. التبويبات =================
 tab_chart, tab_trade, tab_agents, tab_chat = st.tabs([
@@ -89,15 +87,15 @@ with tab_chart:
     renderLightweightCharts([{"chart": chartOptions, "series": candles + ema}], 'chart1')
 
 with tab_trade:
-    st.subheader("خطة التداول (توليد ذكي)")
-    st.write("اضغط على الزر أدناه ليقوم الذكاء الاصطناعي بتحليل السوق وتحديد خطة كاملة تشمل **زمن الصفقة**.")
+    st.subheader("خطة التداول (تحليل السيناريوهات)")
+    st.write("سيقوم الذكاء الاصطناعي بتحليل السيناريوهات المحتملة (صعودي، هبوطي، محايد) قبل إعطاء القرار النهائي.")
     
     if st.button("⚡ توليد خطة التداول الآن", use_container_width=True):
-        with st.spinner("جاري تحليل السوق وتحديد زمن الصفقة..."):
+        with st.spinner("جاري تحليل السيناريوهات وتحديد زمن الصفقة..."):
             try:
-                # إعطاء الذكاء الاصطناعي البيانات والمؤشرات
-                recent_data = df.tail(3)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
+                recent_data = df.tail(5)[['open', 'high', 'low', 'close', 'rsi', 'ema50', 'atr']].to_string()
                 
+                # استخدام response_schema لضمان الحصول على JSON منظم
                 prompt = f"""
                 أنت متداول مؤسسي خبير. حلل البيانات التالية لزوج {symbol} على إطار {timeframe}.
                 البيانات:
@@ -105,36 +103,58 @@ with tab_trade:
                 السعر الحالي: {current_price:.3f}
                 
                 المنصة: {platform}.
-                المطلوب: تحديد خطة صفقة دقيقة.
-                أريد الإجابة بصيغة JSON فقط (بدون أي نصوص إضافية أو علامات Markdown):
+                المطلوب: تحليل شامل مع سيناريوهات متعددة قبل اتخاذ القرار.
+                قم بتقييم الاحتمالات (صعودي، هبوطي، محايد) بناءً على confluence المؤشرات.
+                
+                أريد الإجابة بصيغة JSON فقط وفقاً للمخطط التالي:
                 {{
-                    "direction": "شراء" أو "بيع" أو "انتظار",
-                    "entry_price": "سعر الدخول",
-                    "tp": "هدف الربح",
-                    "sl": "وقف الخسارة",
-                    "trade_duration": "زمن الصفقة المتوقع بالدقائق (مثلاً: 3 دقائق، 15 دقيقة، أو ساعتين)",
-                    "reasoning": "سبب مختصر جداً للقرار"
+                    "scenarios": [
+                        {{"type": "صعودي", "probability": "نسبة مئوية", "reasoning": "السبب"}},
+                        {{"type": "هبوطي", "probability": "نسبة مئوية", "reasoning": "السبب"}},
+                        {{"type": "محايد", "probability": "نسبة مئوية", "reasoning": "السبب"}}
+                    ],
+                    "final_decision": {{
+                        "direction": "شراء" أو "بيع" أو "انتظار",
+                        "entry_price": "سعر الدخول",
+                        "tp": "هدف الربح",
+                        "sl": "وقف الخسارة",
+                        "trade_duration": "زمن الصفقة المتوقع بالدقائق",
+                        "confidence": "نسبة الثقة من 0 إلى 100"
+                    }},
+                    "summary": "ملخص تنفيذي للقرار"
                 }}
                 """
                 
-                response = model.generate_content(prompt)
+                # استخدام response_schema لفرض هيكل JSON
+                response = model.generate_content(
+                    prompt,
+                    generation_config={"response_mime_type": "application/json"}
+                )
                 
-                # تنظيف الرد لضمان قراءة JSON بشكل صحيح
-                clean_json = re.sub(r'```json\n|\n```', '', response.text).strip()
-                plan = json.loads(clean_json)
+                plan = json.loads(response.text)
                 
-                st.success(f"**القرار:** {plan['direction']} | **السبب:** {plan['reasoning']}")
+                # عرض السيناريوهات
+                st.markdown("### 🔮 تحليل السيناريوهات")
+                for scenario in plan['scenarios']:
+                    with st.expander(f"سيناريو {scenario['type']} (الاحتمالية: {scenario['probability']})"):
+                        st.write(scenario['reasoning'])
+                
                 st.divider()
                 
-                # عرض الخطة في 4 أعمدة لتشمل زمن الصفقة
+                # عرض القرار النهائي
+                final = plan['final_decision']
+                st.markdown(f"### 🎯 القرار النهائي: **{final['direction']}** (الثقة: {final['confidence']}%)")
+                
                 c1, c2, c3, c4 = st.columns(4)
-                c1.info(f"**نقطة الدخول**\n\n### {plan['entry_price']}")
-                c2.success(f"**هدف الربح**\n\n### {plan['tp']}")
-                c3.error(f"**وقف الخسارة**\n\n### {plan['sl']}")
-                c4.warning(f"**زمن الصفقة**\n\n### {plan['trade_duration']}")
+                c1.info(f"**نقطة الدخول**\n\n### {final['entry_price']}")
+                c2.success(f"**هدف الربح**\n\n### {final['tp']}")
+                c3.error(f"**وقف الخسارة**\n\n### {final['sl']}")
+                c4.warning(f"**زمن الصفقة**\n\n### {final['trade_duration']}")
+                
+                st.info(f"**الملخص:** {plan['summary']}")
                 
                 # إرسال إلى تليجرام
-                msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {plan['direction']}\nالدخول: {plan['entry_price']}\nالهدف: {plan['tp']}\nالوقف: {plan['sl']}\n*زمن الصفقة:* {plan['trade_duration']}"
+                msg = f"⚡ *Thunder Trade Plan* ⚡\nالزوج: {symbol} ({timeframe})\nالقرار: {final['direction']} (ثقة {final['confidence']}%)\nالدخول: {final['entry_price']}\nالهدف: {final['tp']}\nالوقف: {final['sl']}\n*زمن الصفقة:* {final['trade_duration']}\n\n*الملخص:* {plan['summary']}"
                 if send_telegram_alert(msg):
                     st.toast("📤 تم إرسال الخطة إلى تليجرام!")
                     
@@ -162,9 +182,8 @@ with tab_agents:
                     "trade_duration": "زمن الصفقة بالدقائق"
                 }}
                 """
-                response = model.generate_content(prompt)
-                clean_json = re.sub(r'```json\n|\n```', '', response.text).strip()
-                res = json.loads(clean_json)
+                response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+                res = json.loads(response.text)
                 
                 col1, col2, col3 = st.columns(3)
                 col1.info(f"📊 الفني:\n{res['technical']}")
