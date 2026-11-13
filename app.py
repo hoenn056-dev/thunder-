@@ -11,9 +11,9 @@ import json
 import base64
 from io import BytesIO
 
-st.set_page_config(layout="wide", page_title="Thunder Pro", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="Thunder Sniper Pro", initial_sidebar_state="expanded")
 st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container {padding-top: 1rem;}</style>""", unsafe_allow_html=True)
-st.title("⚡ Thunder - Sniper Scalping System")
+st.title("⚡ Thunder Sniper Pro (Rebound Theory)")
 
 # ================= 1. إعداد الذكاء الاصطناعي =================
 try:
@@ -24,7 +24,7 @@ try:
     PRIMARY_MODEL = "deepseek/deepseek-v4.1-flash-1017"
     FALLBACK_MODEL = "meta-llama/llama-3-8b-instruct:free"
 except Exception as e:
-    st.error(f"خطأ في مفتاح OpenRouter: {e}. تأكد من إضافته في Secrets.")
+    st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
 def generate_analysis(prompt):
     try:
@@ -32,7 +32,7 @@ def generate_analysis(prompt):
             model=PRIMARY_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            temperature=0.1 # درجة حرارة منخفضة جداً لضمان الدقة والمنطق
+            temperature=0.1
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -57,44 +57,51 @@ def send_telegram_alert(text):
     except:
         return False
 
-# ================= 2. جلب البيانات لعدة أزواج =================
-PAIRS = ["USD/JPY", "EUR/USD", "GBP/USD", "AUD/USD", "USD/CAD"]
+# ================= 2. الإعدادات الجانبية =================
+with st.sidebar:
+    st.header("إعدادات السوق")
+    platform = st.radio("اختر المنصة:", ["Pocket Option (Binary)", "تداول فوركس (Scalping)"])
+    symbol = st.selectbox("اختر الزوج", ["USD/JPY", "EUR/USD", "GBP/USD", "AUD/USD"])
+    yf_symbol = symbol.replace("/", "") + "=X"
+    
+    st.divider()
+    # إضافة نسبة العائد (Payout) كما طلبت
+    payout = st.number_input("نسبة العائد الحالية (Payout %):", min_value=10, max_value=100, value=75, step=1)
+    st.info("💡 لا يتم الدخول إذا كان العائد أقل من 70%.")
 
+# ================= 3. جلب البيانات =================
 @st.cache_data(ttl=60)
 def get_market_data(sym):
-    yf_symbol = sym.replace("/", "") + "=X"
-    df_main = yf.download(yf_symbol, period="5d", interval="15m", auto_adjust=True, progress=False)
-    df_entry = yf.download(yf_symbol, period="5d", interval="5m", auto_adjust=True, progress=False)
+    # نجلب 15 دقيقة للاتجاه، و 5 دقائق للدخول
+    df_15m = yf.download(sym, period="5d", interval="15m", auto_adjust=True, progress=False)
+    df_5m = yf.download(sym, period="5d", interval="5m", auto_adjust=True, progress=False)
     
-    if df_main.empty or df_entry.empty: return None, None
+    if df_15m.empty or df_5m.empty: return None, None
     
-    for df in [df_main, df_entry]:
+    for df in [df_15m, df_5m]:
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         df.columns = [c.lower() for c in df.columns]
         df['rsi'] = ta.rsi(df['close'], length=14)
         df['ema50'] = ta.ema(df['close'], length=50)
-        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+        # حساب طول ذيل الشمعة (لاصطياد ضربات السيولة)
+        df['lower_wick'] = df[['open', 'close']].min(axis=1) - df['low']
+        df['body'] = abs(df['open'] - df['close'])
         
-    return df_main, df_entry
+    return df_15m, df_5m
 
-# ================= 3. الإعدادات الجانبية =================
-with st.sidebar:
-    st.header("إعدادات السوق")
-    platform = st.radio("اختر المنصة:", ["Pocket Option (Binary)", "تداول فوركس (Scalping)"])
-    symbol_chart = st.selectbox("اعرض الشارت لزوج:", PAIRS)
-    df_main, df_entry = get_market_data(symbol_chart)
-    
-    if df_main is None:
-        st.error("تعذر جلب البيانات للشارت.")
-        st.stop()
-        
-    current_price_chart = float(df_entry.iloc[-1]['close'])
+df_15m, df_5m = get_market_data(yf_symbol)
+
+if df_15m is None or df_5m is None:
+    st.error("تعذر جلب البيانات.")
+    st.stop()
+
+current_price = float(df_5m.iloc[-1]['close'])
 
 # ================= 4. التبويبات =================
-tab_chart, tab_trade = st.tabs(["📈 الشارت", "🎯 القناص (أفضل صفقة)"])
+tab_chart, tab_sniper = st.tabs(["📈 الشارت", "🎯 القناص (Rebound)"])
 
 with tab_chart:
-    chart_df = df_main.reset_index()
+    chart_df = df_15m.reset_index()
     time_col = 'Datetime' if 'Datetime' in chart_df.columns else 'Date'
     chart_df['time'] = pd.to_datetime(chart_df[time_col]).apply(lambda x: int(time.mktime(x.timetuple())))
     
@@ -104,52 +111,56 @@ with tab_chart:
     chartOptions = {"height": 500, "layout": {"textColor": '#d1d4dc', "background": {"type": 'solid', "color": '#0a0a0f'}}, "grid": {"vertLines": {"color": '#1e1e2d'}, "horzLines": {"color": '#1e1e2d'}}, "timeScale": {"timeVisible": True}, "handleScroll": True, "handleScale": True}
     renderLightweightCharts([{"chart": chartOptions, "series": candles + ema}], 'chart1')
 
-with tab_trade:
-    st.subheader("🎯 محرك القناصة (Sniper Engine)")
-    st.write("سيقوم الذكاء الاصطناعي بفحص جميع الأزواج واختيار **الصفقة المثالية الوحيدة**. إذا لم يجد صفقة آمنة، سينصحك بالانتظار.")
+with tab_sniper:
+    st.subheader("🎯 Thunder Sniper Pro (نظرية الارتداد)")
+    st.write("النظام يبحث عن فخ السيولة (Liquidity Grab) والارتداد الحقيقي. لن يدخل إلا إذا كان العائد 70%+.")
     
-    if st.button("⚡ ابحث عن أفضل صفقة الآن", use_container_width=True):
-        with st.spinner("جاري فحص جميع الأزواج لاصطياد أفضل صفقة..."):
+    if st.button("⚡ فحص السوق واصطياد الارتداد", use_container_width=True):
+        if payout < 70:
+            st.error(f"🛑 العائد الحالي ({payout}%) أقل من 70%. القناص يرفض الدخول في هذه الظروف.")
+            st.stop()
+            
+        with st.spinner("جاري فحص الشموع لاكتشاف ضربات السيولة..."):
             try:
-                # تجهيز بيانات جميع الأزواج
-                all_pairs_data = ""
-                for p in PAIRS:
-                    df_m, df_e = get_market_data(p)
-                    if df_m is not None and len(df_m) > 0:
-                        price = float(df_e.iloc[-1]['close'])
-                        data_15m = df_m.tail(2)[['close', 'rsi', 'ema50']].to_dict()
-                        data_5m = df_e.tail(2)[['close', 'rsi', 'ema50']].to_dict()
-                        all_pairs_data += f"\n--- {p} (السعر: {price:.3f}) ---\n15m: {data_15m}\n5m: {data_5m}\n"
+                # تجهيز بيانات آخر 3 شموع على 15m و 5m
+                data_15m = df_15m.tail(3)[['open', 'high', 'low', 'close', 'rsi', 'ema50']].to_string()
+                data_5m = df_5m.tail(3)[['open', 'high', 'low', 'close', 'rsi', 'lower_wick', 'body']].to_string()
 
                 prompt = f"""
-                أنت "قناص" تداول محترف (Sniper Trader). هدفك هو الحفاظ على رأس المال وعدم الدخول إلا في الصفقات المثالية (نسبة نجاح عالية جداً).
-                لقد قمت بفحص الأزواج التالية. بيانات آخر شمعتين لكل زوج:
-                {all_pairs_data}
+                أنت "Thunder Sniper Pro"، متداول مؤسسي خبير في استراتيجية (Liquidity Grab & Rebound) على منصة Pocket Option.
+                السعر الحالي: {current_price:.3f}
+                نسبة العائد (Payout): {payout}%
                 
-                القواعد الصارمة جداً (يجب اتباعها):
-                1. **أفضل زوج:** عليك مقارنة كل الأزواج واختيار الزوج الوحيد الذي يمتلك أقوى إشارة (Confluence) بين إطار 15 دقيقة و 5 دقائق.
-                2. **الفلترة:** إذا لم يكن هناك توافق واضح، يجب أن يكون القرار "انتظار" (No Trade). لا تجبرني على الدخول.
-                3. **زمن الصفقة:** اختر "5 دقائق" إذا كان السعر قريباً جداً من الدعم/المقاومة (سكالبينج سريع). اختر "15 دقيقة" إذا كان يحتاج مسافة أطول.
-                4. **الثقة:** لا تعطني ثقة وهمية. اكتب النسبة الحقيقية بناءً على قوة الإشارة (فقط إذا كانت الإشارة قوية جداً، ستكون الثقة 85% أو أكثر).
-                5. **الشرح:** اشرح لي بالتفصيل لماذا اخترت هذا الزوج بالذات، ولماذا هذه الصفقة "هي الأفضل".
+                بيانات إطار 15 دقيقة (للاتجاه العام):
+                {data_15m}
+                
+                بيانات إطار 5 دقائق (للدخول واصطياد السيولة):
+                {data_5m}
+                
+                الاستراتيجية الصارمة (يجب اتباعها حرفياً):
+                1. **الاتجاه:** يجب أن يكون السعر فوق EMA50 على إطار 15 دقيقة.
+                2. **الفخ (Trap):** راقب شموع 5 دقائق. هل هناك شمعة لها ذيل سفلي طويل (Lower Wick > Body)؟ هذا يعني أن صانع السوق ضرب وقف الخسائر وجمع السيولة.
+                3. **الارتداد (Rebound):** بعد الذيل السفلي، هل أغلقت الشمعة الحالية خضراء وقوية؟ هذا هو دخولنا.
+                4. **لا تشترِ في القمة أبداً:** إذا كان السعر مرتفعاً جداً و RSI متشبعاً (أعلى من 70)، يجب أن يكون القرار "انتظار".
+                5. **المدة:** 15 دقيقة فقط (لإعطاء السعر وقتاً للارتداد).
                 
                 أريد الإجابة بصيغة JSON فقط:
                 {{
-                    "best_pair": "اسم الزوج الذي اخترته (أو لا يوجد)",
-                    "why_best_pair": "لماذا هذا الزوج هو الأفضل الآن؟ (تفصيل)",
+                    "trap_detected": true/false,
+                    "rebound_confirmed": true/false,
                     "scenarios": [
-                        {{"type": "صعودي", "probability": "نسبة", "reasoning": "السبب"}},
-                        {{"type": "هبوطي", "probability": "نسبة", "reasoning": "السبب"}}
+                        {{"type": "صعودي (ارتداد)", "probability": "نسبة", "reasoning": "السبب"}},
+                        {{"type": "هبوطي (استمرار)", "probability": "نسبة", "reasoning": "السبب"}}
                     ],
                     "final_decision": {{
-                        "direction": "شراء" أو "بيع" أو "انتظار",
-                        "entry_price": "سعر الدخول",
+                        "direction": "شراء" أو "انتظار",
+                        "entry_price": "{current_price:.3f}",
                         "tp": "هدف الربح",
                         "sl": "وقف الخسارة",
-                        "trade_duration": "5 دقائق" أو "15 دقيقة",
-                        "confidence": "النسبة الحقيقية (مثلاً 70% أو 85%)"
+                        "trade_duration": "15 دقيقة",
+                        "confidence": "النسبة الحقيقية"
                     }},
-                    "summary": "ملخص تنفيذي للصفقة"
+                    "summary": "اشرح لي كيف حدثت ضربة السيولة، وكيف ارتد السعر، ولماذا هذه الصفقة آمنة."
                 }}
                 """
                 
@@ -166,20 +177,15 @@ with tab_trade:
                 plan = json.loads(clean_json)
                 final = plan.get('final_decision', {})
                 
-                # عرض النتيجة
+                # عرض النتائج
                 if final.get('direction') == "انتظار":
-                    st.warning("🛑 **القناص ينصح بالانتظار:** السوق الحالي لا يوفر صفقة آمنة بنسبة عالية. لا تخاطر بأموالك الآن.")
-                    st.info(f"**السبب:** {plan.get('why_best_pair')}")
+                    st.warning("🛑 **لا توجد ضربة سيولة واضحة:** السوق الحالي لا يوفر فخاً حقيقياً. انتظر ولا تخاطر.")
+                    st.info(f"**السبب:** {plan.get('summary')}")
                 else:
-                    st.success(f"🎯 **الزوج الأفضل:** {plan.get('best_pair')} | **القرار:** {final.get('direction')} (ثقة: {final.get('confidence')})")
+                    st.success(f"🎯 **تم اصطياد الارتداد!** القرار: {final.get('direction')} (ثقة: {final.get('confidence')})")
                     
-                    st.markdown("### 🧠 لماذا هذه الصفقة هي الأفضل؟")
-                    st.write(plan.get('why_best_pair'))
-                    
-                    st.markdown("### 🔮 تحليل السيناريوهات")
-                    for scenario in plan.get('scenarios', []):
-                        with st.expander(f"سيناريو {scenario.get('type')} (الاحتمالية: {scenario.get('probability')})"):
-                            st.write(scenario.get('reasoning'))
+                    st.markdown("### 🧠 تحليل صانع السوق (Smart Money)")
+                    st.write(plan.get('summary'))
                     
                     st.divider()
                     
@@ -189,9 +195,7 @@ with tab_trade:
                     c3.error(f"**وقف الخسارة**\n\n### {final.get('sl')}")
                     c4.warning(f"**زمن الصفقة**\n\n### {final.get('trade_duration')}")
                     
-                    st.info(f"**الملخص:** {plan.get('summary')}")
-                    
-                    msg = f"⚡ *Thunder Sniper* ⚡\nالزوج: {plan.get('best_pair')}\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')})\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*الوقت:* {final.get('trade_duration')}\n\n*السبب:* {plan.get('why_best_pair')}"
+                    msg = f"⚡ *Thunder Sniper Pro* ⚡\nالزوج: {symbol}\nالقرار: {final.get('direction')} (ثقة {final.get('confidence')})\nالعائد: {payout}%\nالدخول: {final.get('entry_price')}\nالهدف: {final.get('tp')}\nالوقف: {final.get('sl')}\n*الوقت:* {final.get('trade_duration')}\n\n*السبب:* {plan.get('summary')}"
                     if send_telegram_alert(msg):
                         st.toast("📤 تم إرسال الصفقة إلى تليجرام!")
                         
