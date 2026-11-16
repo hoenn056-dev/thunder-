@@ -22,12 +22,12 @@ try:
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
     PRIMARY_MODEL = "deepseek/deepseek-v4.1-flash-1017"
-FALLBACK_MODEL = "google/gemma-4-31b-it:free"
+    FALLBACK_MODEL = "google/gemma-4-31b-it:free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
 def generate_analysis(prompt):
-    try:
+    # ... باقي الكود ...
         response = client.chat.completions.create(
             model=PRIMARY_MODEL,
             messages=[{"role": "user", "content": prompt}],
