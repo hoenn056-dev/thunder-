@@ -22,7 +22,7 @@ try:
         api_key=st.secrets["OPENROUTER_API_KEY"],
     )
     PRIMARY_MODEL = "deepseek/deepseek-v4.1-flash-1017"
-    FALLBACK_MODEL = "meta-llama/llama-3-8b-instruct:free"
+    FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
 except Exception as e:
     st.error(f"خطأ في مفتاح OpenRouter: {e}")
 
